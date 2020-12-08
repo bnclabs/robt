@@ -7,13 +7,17 @@ use std::{fs, io, mem};
 
 use crate::{Error, Result};
 
-const VALUE_VER1: u32 = 0x10001;
-const DELTA_VER1: u32 = 0x20001;
+const VALUE_VER1: u32 = 0x0001;
+const DELTA_VER1: u32 = 0x0001;
 
-#[derive(Clone)]
+#[derive(Clone, Cborize)]
 pub enum Value<V> {
-    Nativ(ValueVal<V>),
-    Refrn(ValueRef),
+    N(ValueVal<V>),
+    R(ValueRef),
+}
+
+impl<V> Value<V> {
+    const ID: u32 = VALUE_VER1;
 }
 
 #[derive(Clone, Cborize)]
@@ -25,10 +29,14 @@ impl<V> ValueVal<V> {
     const ID: u32 = VALUE_VER1;
 }
 
-#[derive(Clone)]
+#[derive(Clone, Cborize)]
 pub struct ValueRef {
     fpos: u64,
     length: u64,
+}
+
+impl ValueRef {
+    const ID: u32 = VALUE_VER1;
 }
 
 impl<V> Footprint for Value<V>
@@ -37,19 +45,19 @@ where
 {
     fn footprint(&self) -> usize {
         match self {
-            Value::Nativ(ValueVal { value }) => value.footprint(),
-            Value::Refrn(refr) => mem::size_of_val(refr),
+            Value::N(ValueVal { value }) => value.footprint(),
+            Value::R(refr) => mem::size_of_val(refr),
         }
     }
 }
 
 impl<V> Value<V> {
     pub fn new_native(value: V) -> Value<V> {
-        Value::Nativ(ValueVal { value })
+        Value::N(ValueVal { value })
     }
 
     pub fn new_reference(fpos: u64, length: u64) -> Value<V> {
-        Value::Refrn(ValueRef { fpos, length })
+        Value::R(ValueRef { fpos, length })
     }
 }
 
@@ -62,24 +70,19 @@ where
         V: FromCbor,
     {
         match self {
-            Value::Nativ(_) => Ok(self),
-            Value::Refrn(ValueRef { fpos, length }) => {
+            Value::N(_) => Ok(self),
+            Value::R(ValueRef { fpos, length }) => {
                 let block = read_file!(fd, fpos, length, "reading value from vlog")?;
-                let (val, _) = Value::decode(&mut block.as_slice())?;
-                Ok(val)
+                Ok(Self::decode(&mut block.as_slice())?.0)
             }
         }
     }
 
-    pub fn encode<W>(&self, buf: &mut Vec<u8>) -> Result<usize>
+    pub fn encode<W>(self, buf: &mut W) -> Result<usize>
     where
-        V: Clone,
         W: io::Write,
     {
-        match self {
-            Value::Nativ(ValueVal { value }) => Ok(value.clone().into_cbor()?.encode(buf)?),
-            Value::Refrn(_) => err_at!(Fatal, msg: "unexpected value-reference")?,
-        }
+        Ok(self.into_cbor()?.encode(buf)?)
     }
 
     pub fn decode<R>(buf: &mut R) -> Result<(Self, usize)>
@@ -87,19 +90,26 @@ where
         R: io::Read,
     {
         let (val, n) = Cbor::decode(buf)?;
-        let val = ValueVal::from_cbor(val)?;
-        Ok((Value::Nativ(val), n))
+        Ok((Value::from_cbor(val)?, n))
     }
 }
 
-#[derive(Clone)]
+#[derive(Clone, Cborize)]
 pub enum Delta<V>
 where
     V: Diff + FromCbor + IntoCbor,
     <V as Diff>::D: FromCbor + IntoCbor,
 {
-    Nativ(DeltaVal<V>),
-    Refrn(DeltaRef),
+    N(DeltaVal<V>),
+    R(DeltaRef),
+}
+
+impl<V> Delta<V>
+where
+    V: Diff + FromCbor + IntoCbor,
+    <V as Diff>::D: FromCbor + IntoCbor,
+{
+    const ID: u32 = DELTA_VER1;
 }
 
 #[derive(Clone, Cborize)]
@@ -119,10 +129,14 @@ where
     const ID: u32 = DELTA_VER1;
 }
 
-#[derive(Clone)]
+#[derive(Clone, Cborize)]
 pub struct DeltaRef {
     fpos: u64,
     length: u64,
+}
+
+impl DeltaRef {
+    const ID: u32 = DELTA_VER1;
 }
 
 impl<V> Footprint for Delta<V>
@@ -132,8 +146,8 @@ where
 {
     fn footprint(&self) -> usize {
         match self {
-            Delta::Nativ(DeltaVal { diff }) => diff.footprint(),
-            Delta::Refrn(refr) => mem::size_of_val(refr),
+            Delta::N(DeltaVal { diff }) => diff.footprint(),
+            Delta::R(refr) => mem::size_of_val(refr),
         }
     }
 }
@@ -144,11 +158,11 @@ where
     <V as Diff>::D: FromCbor + IntoCbor,
 {
     pub fn new_value(diff: <V as Diff>::D) -> Self {
-        Delta::Nativ(DeltaVal { diff })
+        Delta::N(DeltaVal { diff })
     }
 
     pub fn new_reference(fpos: u64, length: u64) -> Self {
-        Delta::Refrn(DeltaRef { fpos, length })
+        Delta::R(DeltaRef { fpos, length })
     }
 }
 
@@ -163,11 +177,10 @@ where
         <V as Diff>::D: FromCbor,
     {
         match self {
-            Delta::Nativ(_) => Ok(self),
-            Delta::Refrn(DeltaRef { fpos, length }) => {
+            Delta::N(_) => Ok(self),
+            Delta::R(DeltaRef { fpos, length }) => {
                 let block = read_file!(fd, fpos, length, "reading delta from vlog")?;
-                let (val, _) = Delta::decode(&mut block.as_slice())?;
-                Ok(val)
+                Ok(Self::decode(&mut block.as_slice())?.0)
             }
         }
     }
@@ -176,10 +189,7 @@ where
     where
         W: io::Write,
     {
-        match self {
-            Delta::Nativ(DeltaVal { diff }) => Ok(diff.into_cbor()?.encode(buf)?),
-            Delta::Refrn(_) => err_at!(Fatal, msg: "unexpected delta-reference")?,
-        }
+        Ok(self.into_cbor()?.encode(buf)?)
     }
 
     pub fn decode<R>(buf: &mut R) -> Result<(Self, usize)>
@@ -187,8 +197,7 @@ where
         R: io::Read,
     {
         let (val, n) = Cbor::decode(buf)?;
-        let val = DeltaVal::from_cbor(val)?;
-        Ok((Delta::Nativ(val), n))
+        Ok((Delta::from_cbor(val)?, n))
     }
 }
 

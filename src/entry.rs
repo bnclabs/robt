@@ -6,6 +6,56 @@ use crate::{
     vlog,
 };
 
+const ENTRY_VER1: u32 = 0x0001;
+
+#[derive(Clone, Cborize)]
+pub enum Entry<K, V>
+where
+    V: Diff + FromCbor + IntoCbor,
+    <V as Diff>::D: FromCbor + IntoCbor,
+{
+    MM {
+        key: K,
+        fpos: u64,
+    },
+    MZ {
+        key: K,
+        fpos: u64,
+    },
+    ZZ {
+        key: K,
+        seqno: u64,
+        delete: bool,
+        value: vlog::Value<V>,
+        deltas: Vec<vlog::Delta<V>>,
+    },
+}
+
+impl<K, V> Entry<K, V>
+where
+    V: Diff + FromCbor + IntoCbor,
+    <V as Diff>::D: FromCbor + IntoCbor,
+{
+    const ID: u32 = ENTRY_VER1;
+
+    fn new_mm(key: K, fpos: u64) -> Self {
+        Entry::MM { key, fpos }
+    }
+
+    fn new_mz(key: K, fpos: u64) -> Self {
+        Entry::MZ { key, fpos }
+    }
+
+    fn new_zz(
+        key: K,
+        seqno: u64,
+        delete: bool,
+        value: vlog::Value<V>,
+        deltas: Vec<vlog::Delta<V>>,
+    ) -> Self {
+        Entry::ZZ { key, fpos }
+    }
+}
 // Binary format (interMediate-Entry):
 //
 // *------*------------*----------------------*
