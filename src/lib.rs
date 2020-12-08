@@ -70,6 +70,7 @@ macro_rules! err_at {
     }};
 }
 
+mod entry;
 mod vlog;
 
 /// Type alias for Result return type, used by this package.

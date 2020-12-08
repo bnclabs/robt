@@ -9,6 +9,16 @@ use crate::{
     robt_entry::{MEntry, ZEntry},
 };
 
+pub struct MEntry<K, V> {
+    key: entry::Key<K>,
+    entry: entry::Entry<K, V>,
+}
+
+pub struct MBlock<K, V> {
+    offsets: Vec<u32>,
+    entries: Vec<MEntry<K, V>>,
+}
+
 // Binary format (InterMediate-Block prefix):
 //
 // *----------------------*
