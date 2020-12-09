@@ -71,6 +71,7 @@ macro_rules! err_at {
 }
 
 mod entry;
+mod files;
 mod vlog;
 
 /// Type alias for Result return type, used by this package.
@@ -88,6 +89,7 @@ pub enum Error {
     Invalid(String, String),
     IPCFail(String, String),
     ThreadFail(String, String),
+    InvalidFile(String, String),
 }
 
 impl fmt::Display for Error {
@@ -102,6 +104,7 @@ impl fmt::Display for Error {
             Invalid(p, msg) => write!(f, "{} Invalid: {}", p, msg),
             IPCFail(p, msg) => write!(f, "{} IPCFail: {}", p, msg),
             ThreadFail(p, msg) => write!(f, "{} ThreadFail: {}", p, msg),
+            InvalidFile(p, msg) => write!(f, "{} InvalidFile: {}", p, msg),
         }
     }
 }
