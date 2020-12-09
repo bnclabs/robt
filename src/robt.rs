@@ -1,3 +1,7 @@
+use mkit::Entry;
+
+use std::marker;
+
 /// Default value for z-block-size, 4 * 1024 bytes.
 pub const ZBLOCKSIZE: usize = 4 * 1024; // 4KB leaf node
 /// Default value for m-block-size, 4 * 1024 bytes.
@@ -46,7 +50,12 @@ pub struct Config {
 
 impl Config {
     /// Configure differt set of block size for leaf-node, intermediate-node.
-    pub fn set_blocksize(&mut self, z: usize, v: usize, m: usize) -> Result<&mut Self> {
+    pub fn set_blocksize(
+        &mut self,
+        z: usize,
+        v: usize,
+        m: usize,
+    ) -> Result<&mut Self> {
         self.z_blocksize = z;
         self.v_blocksize = v;
         self.m_blocksize = m;
@@ -55,7 +64,11 @@ impl Config {
 
     /// Enable delta persistence, and configure value-log-file. To disable
     /// delta persistance, pass `vlog_file` as None.
-    pub fn set_delta(&mut self, ok: bool, vlog_file: Option<ffi::OsString>) -> Result<&mut Self> {
+    pub fn set_delta(
+        &mut self,
+        ok: bool,
+        vlog_file: Option<ffi::OsString>,
+    ) -> Result<&mut Self> {
         match vlog_file {
             Some(vlog_file) => {
                 self.delta_ok = true;
@@ -69,7 +82,11 @@ impl Config {
 
     /// Persist values in a separate file, called value-log file. To persist
     /// values along with leaf node, pass `ok` as false.
-    pub fn set_value_log(&mut self, ok: bool, file: Option<ffi::OsString>) -> Result<&mut Self> {
+    pub fn set_value_log(
+        &mut self,
+        ok: bool,
+        file: Option<ffi::OsString>,
+    ) -> Result<&mut Self> {
         match file {
             Some(vlog_file) => {
                 self.value_in_vlog = true;
@@ -90,7 +107,7 @@ impl Config {
 }
 
 /// Statistic for Read Only BTree index.
-#[derive(Clone, Default, PartialEq)]
+#[derive(Clone, Default, Cborize)]
 pub struct Stats {
     /// Comes from [Config] type.
     pub name: String,
@@ -142,6 +159,33 @@ pub struct Stats {
 
 pub struct Builder<K, V, B> {
     config: Config,
+    iflush: Flusher,
+    vflush: Flusher,
+    stats: Stats,
+
+    _key: marker::PhantomData<K>,
+    _value: marker::PhantomData<V>,
+    _bitmap: marker::PhantomData<B>,
+}
+
+impl Builder<K, V, B> {
+    fn new(config: Config) -> Builder {
+        Builder {
+            config,
+            stats: Stats::default(),
+            iflusher: Flusher,
+            _key: marker::PhantomData,
+            _value: marker::PhantomData,
+            _bitmap: marker::PhantomData,
+        }
+    }
+
+    fn build_from_iter<E>(iter: impl Iterator<Item = E>) -> Result<Stats>
+    where
+        E: Entry,
+    {
+        todo!()
+    }
 }
 
 /// Index type, immutable, durable, fully-packed and lockless reads.

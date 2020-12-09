@@ -63,7 +63,9 @@ use crate::rdms::Rdms;
 use crate::{
     core::Cutoff,
     core::{self, Bloom, CommitIterator, Index, Serialize, ToJson, Validate},
-    core::{Diff, DiskIndexFactory, Entry, Footprint, IndexIter, Reader, Result},
+    core::{
+        Diff, DiskIndexFactory, Entry, Footprint, IndexIter, Reader, Result,
+    },
     error::Error,
     panic::Panic,
     robt_entry::MEntry,
@@ -311,8 +313,12 @@ where
         let (name, dir) = loop {
             match self.inner.get_mut() {
                 Ok(inner) => match inner {
-                    InnerRobt::Build { name, dir, .. } => break (name.clone(), dir.clone()),
-                    InnerRobt::Snapshot { name, dir, .. } => break (name.clone(), dir.clone()),
+                    InnerRobt::Build { name, dir, .. } => {
+                        break (name.clone(), dir.clone())
+                    }
+                    InnerRobt::Snapshot { name, dir, .. } => {
+                        break (name.clone(), dir.clone())
+                    }
                 },
                 Err(err) => error!(target: "robt  ", "drop {}", err),
             }
@@ -340,7 +346,11 @@ where
     <V as Diff>::D: Serialize,
     B: Bloom,
 {
-    pub fn new(dir: &ffi::OsStr, name: &str, mut config: Config) -> Result<Robt<K, V, B>> {
+    pub fn new(
+        dir: &ffi::OsStr,
+        name: &str,
+        mut config: Config,
+    ) -> Result<Robt<K, V, B>> {
         config.name = name.to_string();
 
         let inner = InnerRobt::Build {
@@ -410,9 +420,10 @@ where
             InnerRobt::Build { name, .. } => name.clone(),
             InnerRobt::Snapshot { name, .. } => name.clone(),
         };
-        let purger = rt::Thread::new(format!("robt-purger-{}", name), move |rx| {
-            move || thread_purger(name.0, rx)
-        });
+        let purger =
+            rt::Thread::new(format!("robt-purger-{}", name), move |rx| {
+                move || thread_purger(name.0, rx)
+            });
         Ok(Robt {
             inner: sync::Mutex::new(inner.deref().clone()),
             purger: Some(purger),
@@ -423,9 +434,13 @@ where
         for file in files.into_iter() {
             // verify that requested files to be purged belong to this Robt
             // instance and also assert that it belongs to an older snapshot.
-            let file_name = match path::PathBuf::from(file.clone()).file_name() {
+            let file_name = match path::PathBuf::from(file.clone()).file_name()
+            {
                 Some(file_name) => Ok(file_name.to_os_string()),
-                None => err_at!(InvalidFile, msg: format!("purge_files() {:?}", file)),
+                None => err_at!(
+                    InvalidFile,
+                    msg: format!("purge_files() {:?}", file)
+                ),
             }?;
             let nm: Name = match IndexFileName(file_name.clone()).try_into() {
                 Ok(nm) => nm,
@@ -435,11 +450,13 @@ where
 
             let (name, version) = match self.as_inner()?.deref() {
                 InnerRobt::Build { name, .. } => {
-                    let (name, ver): (String, usize) = name.clone().try_into()?;
+                    let (name, ver): (String, usize) =
+                        name.clone().try_into()?;
                     (name, ver)
                 }
                 InnerRobt::Snapshot { name, .. } => {
-                    let (name, ver): (String, usize) = name.clone().try_into()?;
+                    let (name, ver): (String, usize) =
+                        name.clone().try_into()?;
                     (name, ver)
                 }
             };
@@ -513,7 +530,9 @@ where
     pub fn to_next_version(&mut self) -> Result<Vec<ffi::OsString>> {
         let mut inner = self.as_inner()?;
         let (new_inner, purge_files) = match inner.deref() {
-            InnerRobt::Build { .. } => err_at!(Fatal, msg: format!("unreachable")),
+            InnerRobt::Build { .. } => {
+                err_at!(Fatal, msg: format!("unreachable"))
+            }
             InnerRobt::Snapshot {
                 dir, name, config, ..
             } => {
@@ -572,8 +591,12 @@ where
 
     pub fn len(&self) -> Result<usize> {
         match self.as_inner()?.deref() {
-            InnerRobt::Snapshot { stats, .. } => Ok(convert_at!(stats.n_count)?),
-            InnerRobt::Build { .. } => err_at!(UnInitialized, msg: format!("Robt.len()")),
+            InnerRobt::Snapshot { stats, .. } => {
+                Ok(convert_at!(stats.n_count)?)
+            }
+            InnerRobt::Build { .. } => {
+                err_at!(UnInitialized, msg: format!("Robt.len()"))
+            }
         }
     }
 
@@ -606,7 +629,9 @@ where
                 let mut snapshot = Snapshot::<K, V, B>::open(dir, &name.0)?;
                 snapshot.validate()
             }
-            InnerRobt::Build { .. } => err_at!(Fatal, msg: format!("unreachable")),
+            InnerRobt::Build { .. } => {
+                err_at!(Fatal, msg: format!("unreachable"))
+            }
         }
     }
 }
@@ -639,7 +664,9 @@ where
                     err_at!(Fatal, msg: format!("unreachable"))
                 }
             }
-            InnerRobt::Build { .. } => err_at!(UnInitialized, msg: format!("Robt.to_metadata()")),
+            InnerRobt::Build { .. } => {
+                err_at!(UnInitialized, msg: format!("Robt.to_metadata()"))
+            }
         }
     }
 
@@ -647,7 +674,9 @@ where
     fn to_seqno(&self) -> Result<u64> {
         match self.as_inner()?.deref() {
             InnerRobt::Snapshot { stats, .. } => Ok(stats.seqno),
-            InnerRobt::Build { .. } => err_at!(UnInitialized, msg: format!("Robt.to_seqno()")),
+            InnerRobt::Build { .. } => {
+                err_at!(UnInitialized, msg: format!("Robt.to_seqno()"))
+            }
         }
     }
 
@@ -666,7 +695,9 @@ where
                 snapshot.set_bitmap(Arc::clone(bitmap));
                 Ok(snapshot)
             }
-            InnerRobt::Build { .. } => err_at!(UnInitialized, msg: format!("Robt.to_reader()")),
+            InnerRobt::Build { .. } => {
+                err_at!(UnInitialized, msg: format!("Robt.to_reader()"))
+            }
         }
     }
 
@@ -674,7 +705,11 @@ where
         Ok(Panic::new("robt"))
     }
 
-    fn commit<C, F>(&mut self, mut scanner: core::CommitIter<K, V, C>, metacb: F) -> Result<()>
+    fn commit<C, F>(
+        &mut self,
+        mut scanner: core::CommitIter<K, V, C>,
+        metacb: F,
+    ) -> Result<()>
     where
         C: CommitIterator<K, V>,
         F: Fn(Vec<u8>) -> Vec<u8>,
@@ -687,7 +722,8 @@ where
                 let (snapshot, meta_block_bytes) = {
                     let config = config.clone();
                     let b = Builder::<K, V, B>::initial(dir, &name.0, config)?;
-                    let meta_block_bytes = b.build(scanner.scan()?, metacb(vec![]))?;
+                    let meta_block_bytes =
+                        b.build(scanner.scan()?, metacb(vec![]))?;
 
                     let snapshot = Snapshot::<K, V, B>::open(dir, &name.0)?;
                     (snapshot, meta_block_bytes)
@@ -727,7 +763,8 @@ where
                 let old_bitmap = Arc::clone(&old.bitmap);
 
                 let (name, snapshot, meta_block_bytes) = {
-                    let bitmap_iter = scans::BitmappedScan::new(scanner.scan()?);
+                    let bitmap_iter =
+                        scans::BitmappedScan::new(scanner.scan()?);
                     let commit_iter = {
                         let mut mzs = vec![];
                         match old.to_root() {
@@ -773,7 +810,10 @@ where
                     let snapshot = Snapshot::<K, V, B>::open(dir, &name.0)?;
 
                     // purge old snapshot's index file.
-                    self.purger.as_ref().unwrap().post(old.index_fd.to_file())?;
+                    self.purger
+                        .as_ref()
+                        .unwrap()
+                        .post(old.index_fd.to_file())?;
 
                     (name, snapshot, meta_block_bytes)
                 };
@@ -868,12 +908,14 @@ where
                             MetaItem::AppMetadata(data) => data.clone(),
                             _ => err_at!(Fatal, msg: format!("unreachable"))?,
                         };
-                        let mut b = Builder::<K, V, B>::initial(dir, &name.0, conf)?;
+                        let mut b =
+                            Builder::<K, V, B>::initial(dir, &name.0, conf)?;
                         // let mbbytes = b.build(comp_iter, meta)?;
 
                         let (root, bitmap): (u64, B) = {
                             let mut bditer = {
-                                let btiter = scans::BitmappedScan::new(comp_iter);
+                                let btiter =
+                                    scans::BitmappedScan::new(comp_iter);
                                 BuildScan::new(btiter, old_seqno)
                             };
                             let root = b.build_tree(&mut bditer)?;
@@ -887,7 +929,10 @@ where
                     };
 
                     // purge old snapshots file(s).
-                    self.purger.as_ref().unwrap().post(old.index_fd.to_file())?;
+                    self.purger
+                        .as_ref()
+                        .unwrap()
+                        .post(old.index_fd.to_file())?;
                     if let Some((file, _)) = &old.valog_fd {
                         self.purger.as_ref().unwrap().post(file.clone())?;
                     }
@@ -931,7 +976,9 @@ where
 
     fn close(mut self) -> Result<()> {
         let (dir, name) = match self.as_inner()?.deref() {
-            InnerRobt::Snapshot { dir, name, .. } => (dir.clone(), name.clone()),
+            InnerRobt::Snapshot { dir, name, .. } => {
+                (dir.clone(), name.clone())
+            }
             InnerRobt::Build { dir, name, .. } => (dir.clone(), name.clone()),
         };
 
@@ -981,11 +1028,17 @@ where
                 };
                 Ok(Box::new(iter))
             }
-            InnerRobt::Build { .. } => err_at!(UnInitialized, msg: format!("Robt.scan()")),
+            InnerRobt::Build { .. } => {
+                err_at!(UnInitialized, msg: format!("Robt.scan()"))
+            }
         }
     }
 
-    fn scans<G>(&mut self, n_shards: usize, within: G) -> Result<Vec<IndexIter<K, V>>>
+    fn scans<G>(
+        &mut self,
+        n_shards: usize,
+        within: G,
+    ) -> Result<Vec<IndexIter<K, V>>>
     where
         G: Clone + RangeBounds<u64>,
     {
@@ -1000,10 +1053,11 @@ where
                 let mut iters = vec![];
                 for range in ranges.into_iter() {
                     let snap = Snapshot::<K, V, B>::open(dir, &name.0)?;
-                    let iter: IndexIter<K, V> = Box::new(scans::FilterScans::new(
-                        vec![snap.into_range_scan(range)?],
-                        within.clone(),
-                    ));
+                    let iter: IndexIter<K, V> =
+                        Box::new(scans::FilterScans::new(
+                            vec![snap.into_range_scan(range)?],
+                            within.clone(),
+                        ));
                     iters.push(iter)
                 }
 
@@ -1017,11 +1071,17 @@ where
 
                 Ok(iters)
             }
-            InnerRobt::Build { .. } => err_at!(UnInitialized, msg: format!("Robt.scans()")),
+            InnerRobt::Build { .. } => {
+                err_at!(UnInitialized, msg: format!("Robt.scans()"))
+            }
         }
     }
 
-    fn range_scans<N, G>(&mut self, ranges: Vec<N>, within: G) -> Result<Vec<IndexIter<K, V>>>
+    fn range_scans<N, G>(
+        &mut self,
+        ranges: Vec<N>,
+        within: G,
+    ) -> Result<Vec<IndexIter<K, V>>>
     where
         G: Clone + RangeBounds<u64>,
         N: Clone + RangeBounds<K>,
@@ -1032,17 +1092,21 @@ where
                 let mut iters = vec![];
                 for range in ranges.into_iter() {
                     let snap = Snapshot::<K, V, B>::open(dir, &name.0)?;
-                    let iter: IndexIter<K, V> = Box::new(scans::FilterScans::new(
-                        vec![snap.into_range_scan(util::to_start_end(range))?],
-                        within.clone(),
-                    ));
+                    let iter: IndexIter<K, V> =
+                        Box::new(scans::FilterScans::new(
+                            vec![snap
+                                .into_range_scan(util::to_start_end(range))?],
+                            within.clone(),
+                        ));
 
                     iters.push(iter)
                 }
 
                 Ok(iters)
             }
-            InnerRobt::Build { .. } => err_at!(UnInitialized, msg: format!("Robt.range_scans()")),
+            InnerRobt::Build { .. } => {
+                err_at!(UnInitialized, msg: format!("Robt.range_scans()"))
+            }
         }
     }
 }
@@ -1058,7 +1122,9 @@ where
         let inner = self.as_inner()?;
         match inner.deref() {
             InnerRobt::Snapshot { footprint, .. } => Ok(*footprint),
-            InnerRobt::Build { .. } => err_at!(Fatal, msg: format!("unreachable")),
+            InnerRobt::Build { .. } => {
+                err_at!(Fatal, msg: format!("unreachable"))
+            }
         }
     }
 }
@@ -1131,7 +1197,12 @@ impl Config {
     const FLUSH_QUEUE_SIZE: usize = 64;
 
     /// Configure differt set of block size for leaf-node, intermediate-node.
-    pub fn set_blocksize(&mut self, z: usize, v: usize, m: usize) -> Result<&mut Self> {
+    pub fn set_blocksize(
+        &mut self,
+        z: usize,
+        v: usize,
+        m: usize,
+    ) -> Result<&mut Self> {
         self.z_blocksize = z;
         self.v_blocksize = v;
         self.m_blocksize = m;
@@ -1140,7 +1211,11 @@ impl Config {
 
     /// Enable delta persistence, and configure value-log-file. To disable
     /// delta persistance, pass `vlog_file` as None.
-    pub fn set_delta(&mut self, vlog_file: Option<ffi::OsString>, ok: bool) -> Result<&mut Self> {
+    pub fn set_delta(
+        &mut self,
+        vlog_file: Option<ffi::OsString>,
+        ok: bool,
+    ) -> Result<&mut Self> {
         match vlog_file {
             Some(vlog_file) => {
                 self.delta_ok = true;
@@ -1154,7 +1229,11 @@ impl Config {
 
     /// Persist values in a separate file, called value-log file. To persist
     /// values along with leaf node, pass `ok` as false.
-    pub fn set_value_log(&mut self, file: Option<ffi::OsString>, ok: bool) -> Result<&mut Self> {
+    pub fn set_value_log(
+        &mut self,
+        file: Option<ffi::OsString>,
+        ok: bool,
+    ) -> Result<&mut Self> {
         match file {
             Some(vlog_file) => {
                 self.value_in_vlog = true;
@@ -1203,7 +1282,10 @@ impl ToJson for Config {
         let (z, m, v) = (self.z_blocksize, self.m_blocksize, self.v_blocksize);
         let null: ffi::OsString = From::from("null");
         let props = [
-            format!(r#""blocksize":  {{ "z": {}, "m": {}, "v": {} }}"#, z, m, v),
+            format!(
+                r#""blocksize":  {{ "z": {}, "m": {}, "v": {} }}"#,
+                z, m, v
+            ),
             format!(r#""delta_ok": {}"#, self.delta_ok),
             format!(r#""value_in_vlog": {}"#, self.value_in_vlog),
             format!(
@@ -1330,7 +1412,9 @@ pub(crate) fn write_meta_items(
                 hdr[32..40].copy_from_slice(&ln.to_be_bytes());
                 block.extend_from_slice(&data);
             }
-            (i, m) => return err_at!(Fatal, msg: format!("meta-item {},{}", i, m)),
+            (i, m) => {
+                return err_at!(Fatal, msg: format!("meta-item {},{}", i, m))
+            }
         }
     }
     debug!(
@@ -1370,10 +1454,13 @@ pub fn read_meta_items(
     // read header
     let hdr = read_file!(&mut fd, m - 40, 40, "read root-block header")?;
     let root = u64::from_be_bytes(array_at!(hdr[..8])?);
-    let n_bmap: usize = convert_at!(u64::from_be_bytes(array_at!(hdr[8..16])?))?;
+    let n_bmap: usize =
+        convert_at!(u64::from_be_bytes(array_at!(hdr[8..16])?))?;
     let n_md: usize = convert_at!(u64::from_be_bytes(array_at!(hdr[16..24])?))?;
-    let n_stats: usize = convert_at!(u64::from_be_bytes(array_at!(hdr[24..32])?))?;
-    let n_marker: usize = convert_at!(u64::from_be_bytes(array_at!(hdr[32..40])?))?;
+    let n_stats: usize =
+        convert_at!(u64::from_be_bytes(array_at!(hdr[24..32])?))?;
+    let n_marker: usize =
+        convert_at!(u64::from_be_bytes(array_at!(hdr[32..40])?))?;
     // read block
     let meta_block_bytes: u64 = {
         let n_total = n_bmap + n_md + n_stats + n_marker + 40;
@@ -1871,7 +1958,8 @@ where
                 BuildScan::new(scans::BitmappedScan::new(iter), seqno)
             };
             let root = self.build_tree(&mut bscanner)?;
-            let (_, bitmap) = bscanner.update_stats(&mut self.stats)?.close()?;
+            let (_, bitmap) =
+                bscanner.update_stats(&mut self.stats)?.close()?;
             (root, bitmap)
         };
 
@@ -1897,7 +1985,12 @@ where
 
     /// Completes the build process, refer to
     /// [build_start][Builder::build_start] for details.
-    pub fn build_finish(mut self, app_meta: Vec<u8>, bitmap: B, root: u64) -> Result<usize> {
+    pub fn build_finish(
+        mut self,
+        app_meta: Vec<u8>,
+        bitmap: B,
+        root: u64,
+    ) -> Result<usize> {
         let (n_bitmap, bitmap) = (bitmap.len()?, bitmap.to_vec());
         let stats: String = {
             self.stats.n_bitmap = n_bitmap;
@@ -1931,7 +2024,10 @@ where
     }
 
     // return root, iter
-    fn build_tree(&mut self, iter: &mut dyn Iterator<Item = Result<Entry<K, V>>>) -> Result<u64> {
+    fn build_tree(
+        &mut self,
+        iter: &mut dyn Iterator<Item = Result<Entry<K, V>>>,
+    ) -> Result<u64> {
         struct Context<K, V>
         where
             K: Clone + Ord + Serialize,
@@ -1976,7 +2072,8 @@ where
                             let x = m.finalize(&mut self.stats)?;
                             m.flush(self.iflusher.as_ref())?;
                             let k = m.as_first_key()?;
-                            let r = self.insertms(c.ms, c.fpos + x, k, c.fpos)?;
+                            let r =
+                                self.insertms(c.ms, c.fpos + x, k, c.fpos)?;
                             c.ms = r.0;
                             c.fpos = r.1;
 
@@ -2188,7 +2285,10 @@ where
     <V as Diff>::D: Default + Serialize,
     I: Iterator<Item = Result<Entry<K, V>>>,
 {
-    fn new(mut x_iter: I, mut y_iter: Box<Iter<'a, K, V, B>>) -> CommitScan<'a, K, V, I, B> {
+    fn new(
+        mut x_iter: I,
+        mut y_iter: Box<Iter<'a, K, V, B>>,
+    ) -> CommitScan<'a, K, V, I, B> {
         let x_entry = x_iter.next();
         let y_entry = y_iter.next();
         CommitScan {
@@ -2215,30 +2315,32 @@ where
 
     fn next(&mut self) -> Option<Self::Item> {
         match (self.x_entry.take(), self.y_entry.take()) {
-            (Some(Ok(xe)), Some(Ok(mut ye))) => match xe.as_key().cmp(ye.as_key()) {
-                cmp::Ordering::Less => {
-                    self.x_entry = self.x_iter.next();
-                    self.y_entry = Some(Ok(ye));
-                    // println!("commitscan Less {}", xe.to_seqno());
-                    Some(Ok(xe))
-                }
-                cmp::Ordering::Greater => {
-                    self.y_entry = self.y_iter.next();
-                    self.x_entry = Some(Ok(xe));
-                    // println!("commitscan Greater {}", ye.to_seqno());
-                    Some(Ok(ye))
-                }
-                cmp::Ordering::Equal => {
-                    self.x_entry = self.x_iter.next();
-                    self.y_entry = self.y_iter.next();
-                    // println!("commitscan Equal {} {}", xe.to_seqno(), ye.to_seqno(),);
-                    // fetch the value from old snapshot, only value.
-                    match self.y_iter.snap.fetch(&mut ye, false, false) {
-                        Ok(()) => Some(xe.xmerge(ye)),
-                        Err(err) => Some(Err(err)),
+            (Some(Ok(xe)), Some(Ok(mut ye))) => {
+                match xe.as_key().cmp(ye.as_key()) {
+                    cmp::Ordering::Less => {
+                        self.x_entry = self.x_iter.next();
+                        self.y_entry = Some(Ok(ye));
+                        // println!("commitscan Less {}", xe.to_seqno());
+                        Some(Ok(xe))
+                    }
+                    cmp::Ordering::Greater => {
+                        self.y_entry = self.y_iter.next();
+                        self.x_entry = Some(Ok(xe));
+                        // println!("commitscan Greater {}", ye.to_seqno());
+                        Some(Ok(ye))
+                    }
+                    cmp::Ordering::Equal => {
+                        self.x_entry = self.x_iter.next();
+                        self.y_entry = self.y_iter.next();
+                        // println!("commitscan Equal {} {}", xe.to_seqno(), ye.to_seqno(),);
+                        // fetch the value from old snapshot, only value.
+                        match self.y_iter.snap.fetch(&mut ye, false, false) {
+                            Ok(()) => Some(xe.xmerge(ye)),
+                            Err(err) => Some(Err(err)),
+                        }
                     }
                 }
-            },
+            }
             (Some(Ok(xe)), None) => {
                 self.x_entry = self.x_iter.next();
                 Some(Ok(xe))
@@ -2337,7 +2439,12 @@ impl IndexFile {
         }
     }
 
-    fn read_buffer(&mut self, fpos: u64, n: usize, msg: &str) -> Result<Vec<u8>> {
+    fn read_buffer(
+        &mut self,
+        fpos: u64,
+        n: usize,
+        msg: &str,
+    ) -> Result<Vec<u8>> {
         Ok(match self {
             IndexFile::Block { fd, .. } => {
                 let n: u64 = convert_at!(n)?;
@@ -2442,7 +2549,8 @@ where
         } else {
             err_at!(InvalidFile, msg: format!("{:?}/{}", dir, name))
         }?;
-        let bitmap: Arc<B> = if let MetaItem::Bitmap(data) = &mut meta_items[1] {
+        let bitmap: Arc<B> = if let MetaItem::Bitmap(data) = &mut meta_items[1]
+        {
             let bitmap = <B as Bloom>::from_vec(&data)?;
             data.drain(..);
             Ok(Arc::new(bitmap))
@@ -2453,7 +2561,8 @@ where
         let config: Config = stats.into();
 
         // open index file.
-        let index_fd = IndexFile::new_block(Config::stitch_index_file(dir, name))?;
+        let index_fd =
+            IndexFile::new_block(Config::stitch_index_file(dir, name))?;
         err_at!(IoError, index_fd.as_fd().lock_shared())?;
         // open optional value log file.
         let valog_fd = match config.vlog_file {
@@ -2521,16 +2630,25 @@ where
 
         match purge_file(index_file.clone(), &mut vec![], &mut vec![]) {
             "ok" => Ok(()),
-            "locked" => err_at!(InvalidFile, msg: format!("{:?} locked", index_file)),
-            "error" => err_at!(Fatal, msg: format!("error unlocking {:?}", index_file)),
+            "locked" => {
+                err_at!(InvalidFile, msg: format!("{:?} locked", index_file))
+            }
+            "error" => {
+                err_at!(Fatal, msg: format!("error unlocking {:?}", index_file))
+            }
             _ => err_at!(Fatal, msg: format!("unreachable")),
         }?;
 
         let res = if let Some(vlog_file) = vlog_file {
             match purge_file(vlog_file.clone(), &mut vec![], &mut vec![]) {
                 "ok" => Ok(()),
-                "locked" => err_at!(InvalidFile, msg: format!("{:?} locked", vlog_file)),
-                "error" => err_at!(Fatal, msg: format!("error unlocking {:?}", vlog_file)),
+                "locked" => {
+                    err_at!(InvalidFile, msg: format!("{:?} locked", vlog_file))
+                }
+                "error" => err_at!(
+                    Fatal,
+                    msg: format!("error unlocking {:?}", vlog_file)
+                ),
                 _ => err_at!(Fatal, msg: format!("unreachable")),
             }
         } else {
@@ -2657,7 +2775,10 @@ where
         Ok(Scan::new(self, mzs))
     }
 
-    pub(crate) fn into_range_scan<R>(mut self, range: R) -> Result<ScanRange<K, V, B, R>>
+    pub(crate) fn into_range_scan<R>(
+        mut self,
+        range: R,
+    ) -> Result<ScanRange<K, V, B, R>>
     where
         R: RangeBounds<K>,
     {
@@ -2736,11 +2857,12 @@ where
                 partitions.push(range);
                 lk = Bound::Included(hk);
             } else {
-                let mblock2 = MBlock::<K, V>::new_decode(self.index_fd.read_buffer(
-                    mentry.to_fpos(),
-                    m_blocksize,
-                    "partitions, reading mblock1",
-                )?)?;
+                let mblock2 =
+                    MBlock::<K, V>::new_decode(self.index_fd.read_buffer(
+                        mentry.to_fpos(),
+                        m_blocksize,
+                        "partitions, reading mblock1",
+                    )?)?;
                 // println!("to_partitions level-1 len {}", mblock2.len());
                 for index in 0..mblock2.len() {
                     let hk = mblock2.to_key(index)?;
@@ -2760,7 +2882,10 @@ where
         Ok(partitions)
     }
 
-    fn to_shards(&mut self, n_shards: usize) -> Result<Vec<(Bound<K>, Bound<K>)>> {
+    fn to_shards(
+        &mut self,
+        n_shards: usize,
+    ) -> Result<Vec<(Bound<K>, Bound<K>)>> {
         let mut shards = vec![];
 
         let partitions = {
@@ -2831,7 +2956,8 @@ where
             let msg = format!("validate, v_blocksize {} != {}", x, y);
             return err_at!(Fatal, msg: msg);
         } else if c.delta_ok != s.delta_ok {
-            let msg = format!("validate, delta_ok {} != {}", c.delta_ok, s.delta_ok);
+            let msg =
+                format!("validate, delta_ok {} != {}", c.delta_ok, s.delta_ok);
             return err_at!(Fatal, msg: msg);
         } else if c.value_in_vlog != s.value_in_vlog {
             let msg = format!(
@@ -2885,7 +3011,8 @@ where
             let msg = format!("validate, n_count {} > {}", n_count, s.n_count);
             err_at!(Fatal, msg: msg)
         } else if n_deleted != s.n_deleted {
-            let msg = format!("validate, n_deleted {} > {}", n_deleted, s.n_deleted);
+            let msg =
+                format!("validate, n_deleted {} > {}", n_deleted, s.n_deleted);
             err_at!(Fatal, msg: msg)
         } else if seqno > 0 && seqno > s.seqno {
             let msg = format!("validate, seqno {} > {}", seqno, s.seqno);
@@ -3025,7 +3152,11 @@ where
         Ok(Box::new(iter))
     }
 
-    fn scans<G>(&mut self, n_shards: usize, within: G) -> Result<Vec<IndexIter<K, V>>>
+    fn scans<G>(
+        &mut self,
+        n_shards: usize,
+        within: G,
+    ) -> Result<Vec<IndexIter<K, V>>>
     where
         G: Clone + RangeBounds<u64>,
     {
@@ -3055,7 +3186,11 @@ where
         Ok(iters)
     }
 
-    fn range_scans<N, G>(&mut self, ranges: Vec<N>, within: G) -> Result<Vec<IndexIter<K, V>>>
+    fn range_scans<N, G>(
+        &mut self,
+        ranges: Vec<N>,
+        within: G,
+    ) -> Result<Vec<IndexIter<K, V>>>
     where
         G: Clone + RangeBounds<u64>,
         N: Clone + RangeBounds<K>,
@@ -3203,11 +3338,12 @@ where
         let zfpos = self.get_zpos(key, self.to_root()?)?;
 
         // println!("do_get {}", zfpos);
-        let zblock: ZBlock<K, V> = ZBlock::new_decode(self.index_fd.read_buffer(
-            zfpos,
-            self.config.z_blocksize,
-            "do_get(), reading zblock",
-        )?)?;
+        let zblock: ZBlock<K, V> =
+            ZBlock::new_decode(self.index_fd.read_buffer(
+                zfpos,
+                self.config.z_blocksize,
+                "do_get(), reading zblock",
+            )?)?;
         match zblock.find(key, Bound::Unbounded, Bound::Unbounded) {
             Ok((_, mut entry)) => {
                 if entry.as_key().borrow().eq(key) {
@@ -3320,11 +3456,12 @@ where
 
         // println!("build_fwd {} {}", mzs.len(), fpos);
         let zfpos = loop {
-            let mblock = MBlock::<K, V>::new_decode(self.index_fd.read_buffer(
-                fpos,
-                config.m_blocksize,
-                "build_fwd(), reading mblock",
-            )?)?;
+            let mblock =
+                MBlock::<K, V>::new_decode(self.index_fd.read_buffer(
+                    fpos,
+                    config.m_blocksize,
+                    "build_fwd(), reading mblock",
+                )?)?;
             mzs.push(MZ::M { fpos, index: 0 });
 
             let mentry = mblock.to_entry(0)?;
@@ -3350,21 +3487,23 @@ where
         match mzs.pop() {
             None => Ok(()),
             Some(MZ::M { fpos, mut index }) => {
-                let mblock = MBlock::<K, V>::new_decode(self.index_fd.read_buffer(
-                    fpos,
-                    config.m_blocksize,
-                    "rebuild_fwd(), reading mblock",
-                )?)?;
+                let mblock =
+                    MBlock::<K, V>::new_decode(self.index_fd.read_buffer(
+                        fpos,
+                        config.m_blocksize,
+                        "rebuild_fwd(), reading mblock",
+                    )?)?;
                 index += 1;
                 match mblock.to_entry(index) {
                     Ok(MEntry::DecZ { fpos: zfpos, .. }) => {
                         mzs.push(MZ::M { fpos, index });
 
-                        let zblock = ZBlock::new_decode(self.index_fd.read_buffer(
-                            zfpos,
-                            config.z_blocksize,
-                            "rebuild_fwd(), reading zblock",
-                        )?)?;
+                        let zblock =
+                            ZBlock::new_decode(self.index_fd.read_buffer(
+                                zfpos,
+                                config.z_blocksize,
+                                "rebuild_fwd(), reading zblock",
+                            )?)?;
                         mzs.push(MZ::Z { zblock, index: 0 });
                         Ok(())
                     }
@@ -3389,11 +3528,12 @@ where
         let config = &self.config;
 
         let zfpos = loop {
-            let mblock = MBlock::<K, V>::new_decode(self.index_fd.read_buffer(
-                fpos,
-                config.m_blocksize,
-                "build_rev(), reading mblock",
-            )?)?;
+            let mblock =
+                MBlock::<K, V>::new_decode(self.index_fd.read_buffer(
+                    fpos,
+                    config.m_blocksize,
+                    "build_rev(), reading mblock",
+                )?)?;
             let index = mblock.len() - 1;
             mzs.push(MZ::M { fpos, index });
 
@@ -3421,21 +3561,23 @@ where
             None => Ok(()),
             Some(MZ::M { index: 0, .. }) => self.rebuild_rev(mzs),
             Some(MZ::M { fpos, mut index }) => {
-                let mblock = MBlock::<K, V>::new_decode(self.index_fd.read_buffer(
-                    fpos,
-                    config.m_blocksize,
-                    "rebuild_rev(), reading mblock",
-                )?)?;
+                let mblock =
+                    MBlock::<K, V>::new_decode(self.index_fd.read_buffer(
+                        fpos,
+                        config.m_blocksize,
+                        "rebuild_rev(), reading mblock",
+                    )?)?;
                 index -= 1;
                 match mblock.to_entry(index) {
                     Ok(MEntry::DecZ { fpos: zfpos, .. }) => {
                         mzs.push(MZ::M { fpos, index });
 
-                        let zblock = ZBlock::new_decode(self.index_fd.read_buffer(
-                            zfpos,
-                            config.z_blocksize,
-                            "rebuild_rev(), reading zblock",
-                        )?)?;
+                        let zblock =
+                            ZBlock::new_decode(self.index_fd.read_buffer(
+                                zfpos,
+                                config.z_blocksize,
+                                "rebuild_rev(), reading zblock",
+                            )?)?;
                         let idx: isize = convert_at!((zblock.len()? - 1))?;
                         mzs.push(MZ::Z { zblock, index: idx });
                         Ok(())
@@ -3466,11 +3608,12 @@ where
         let (from_min, to_max) = (Bound::Unbounded, Bound::Unbounded);
 
         let zfpos = loop {
-            let mblock = MBlock::<K, V>::new_decode(self.index_fd.read_buffer(
-                fpos,
-                config.m_blocksize,
-                "build(), reading mblock",
-            )?)?;
+            let mblock =
+                MBlock::<K, V>::new_decode(self.index_fd.read_buffer(
+                    fpos,
+                    config.m_blocksize,
+                    "build(), reading mblock",
+                )?)?;
             let mentry = match mblock.find(key, from_min, to_max) {
                 Ok(mentry) => Ok(mentry),
                 Err(Error::__LessThan) => mblock.to_entry(0),
@@ -3692,7 +3835,10 @@ where
         })
     }
 
-    fn new_versions(snap: &'a mut Snapshot<K, V, B>, mzs: Vec<MZ<K, V>>) -> Box<Self> {
+    fn new_versions(
+        snap: &'a mut Snapshot<K, V, B>,
+        mzs: Vec<MZ<K, V>>,
+    ) -> Box<Self> {
         Box::new(Iter {
             snap,
             mzs,
@@ -3701,7 +3847,10 @@ where
         })
     }
 
-    fn new_shallow(snap: &'a mut Snapshot<K, V, B>, mzs: Vec<MZ<K, V>>) -> Box<Self> {
+    fn new_shallow(
+        snap: &'a mut Snapshot<K, V, B>,
+        mzs: Vec<MZ<K, V>>,
+    ) -> Box<Self> {
         Box::new(Iter {
             snap,
             mzs,
@@ -3726,7 +3875,11 @@ where
                 Some(Ok(mut entry)) => {
                     // println!("one {}", entry.to_seqno());
                     self.mzs.push(z);
-                    match self.snap.fetch(&mut entry, self.shallow, self.versions) {
+                    match self.snap.fetch(
+                        &mut entry,
+                        self.shallow,
+                        self.versions,
+                    ) {
                         Ok(()) => Some(Ok(entry)),
                         Err(err) => Some(Err(err)),
                     }

@@ -14,12 +14,34 @@ macro_rules! read_file {
                     Ok(n) if buf.len() == n => Ok(buf),
                     Ok(n) => {
                         let m = buf.len();
-                        err_at!(Fatal, msg: concat!($msg, " {}/{} at {}"), m, n, $fpos)
+                        err_at!(
+                            Fatal,
+                            msg: concat!($msg, " {}/{} at {}"),
+                            m,
+                            n,
+                            $fpos
+                        )
                     }
                     Err(err) => err_at!(IOError, Err(err)),
                 }
             }
             Err(err) => err_at!(IOError, Err(err)),
+        }
+    }};
+}
+
+macro_rules! write_file {
+    ($fd:expr, $buffer:expr, $file:expr, $msg:expr) => {{
+        use std::io::Write;
+
+        let n = err_at!(IOError, $fd.write($buffer))?;
+        if $buffer.len() == n {
+            Ok(n)
+        } else {
+            err_at!(
+                Fatal,
+                msg: "{}, {:?}, {}/{}", $msg, $file, $buffer.len(), n
+            )
         }
     }};
 }
@@ -72,6 +94,7 @@ macro_rules! err_at {
 
 mod entry;
 mod files;
+mod flush;
 mod vlog;
 
 /// Type alias for Result return type, used by this package.
