@@ -271,6 +271,8 @@ impl Builder<K, V, B> {
 
     fn build_flush(mut self) -> Result<(u64, u64)> {
         let block = self.to_meta_blocks()?;
+        // TODO: append block with size of block and marker, to make sure
+        // that a corrupt meta-blocks don't end up as valid meta-items.
         self.iflush.post(block)?;
 
         let len1 = self.iflush.close()?;
