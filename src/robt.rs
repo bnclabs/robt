@@ -106,6 +106,24 @@ impl Config {
     }
 }
 
+impl Config {
+    fn to_index_file(&self) -> ffi::OsString {
+        let file_path: path::PathBuf =
+            [self.dir, IndexFileName::from(self.name.clone()).into()]
+                .iter()
+                .collect();
+        file_path.to_os_string()
+    }
+
+    fn to_vlog_file(&self) -> ffi::OsString {
+        let file_path: path::PathBuf =
+            [self.dir, VlogFileName::from(self.name.clone()).into()]
+                .iter()
+                .collect();
+        file_path.to_os_string()
+    }
+}
+
 /// Statistic for Read Only BTree index.
 #[derive(Clone, Default, Cborize)]
 pub struct Stats {
@@ -146,8 +164,6 @@ pub struct Stats {
     pub padding: usize,
     /// Older size of value-log file, applicable only in compaction.
     pub n_abytes: usize,
-    /// Size of serialized bitmap bytes.
-    pub mem_bitmap: usize,
     /// Number of entries in bitmap.
     pub n_bitmap: usize,
 
@@ -157,35 +173,165 @@ pub struct Stats {
     pub epoch: i128,
 }
 
-pub struct Builder<K, V, B> {
+pub struct Builder<K, V, B = NoBitmap> {
     config: Config,
+
     iflush: Flusher,
     vflush: Flusher,
-    stats: Stats,
 
+    initial: bool,
+    root: u64,
+    app_meta: Vec<u8>,
+    bitmap: B,
+    stats: Stats,
     _key: marker::PhantomData<K>,
     _value: marker::PhantomData<V>,
-    _bitmap: marker::PhantomData<B>,
 }
 
 impl Builder<K, V, B> {
-    fn new(config: Config) -> Builder {
+    pub fn initial(config: Config, app_meta: Vec<u8>) -> Builder {
+        let iflush =
+            Flusher::new(config.to_index_file(), true, config.flush_queue_size);
+        let vflush =
+            Flusher::new(config.to_vlog_file(), true, config.flush_queue_size);
+
         Builder {
             config,
+            iflush,
+            ivlush,
             stats: Stats::default(),
-            iflusher: Flusher,
+
+            initial: true,
+            app_meta,
+            bitmap: B::create(),
             _key: marker::PhantomData,
             _value: marker::PhantomData,
-            _bitmap: marker::PhantomData,
         }
     }
 
-    fn build_from_iter<E>(iter: impl Iterator<Item = E>) -> Result<Stats>
+    pub fn incremental(config: Config, app_meta: Vec<u8>) -> Builder {
+        let iflush =
+            Flusher::new(config.to_index_file(), true, config.flush_queue_size);
+        let vflush =
+            Flusher::new(config.to_vlog_file(), true, config.flush_queue_size);
+
+        Builder {
+            config,
+            iflush,
+            ivlush,
+            stats: Stats::default(),
+
+            initial: false,
+            app_meta,
+            bitmap: B::create(),
+            _key: marker::PhantomData,
+            _value: marker::PhantomData,
+        }
+    }
+}
+
+impl Builder<K, V, B> {
+    pub fn build_from_iter<I, E>(iter: I) -> Result<Stats>
     where
+        K: Hash,
+        I: Iterator<Item = Result<Entry<K, V>>>,
         E: Entry,
     {
+        let mut iter = {
+            let seqno = 0_64;
+            BuildScan::new(scans::BitmappedScan::new(iter), seqno)
+        };
+        let root = 0_u64; // self.build_tree(&mut iter)?;
+        let (_, bitmap) = iter.unwrap_with(&mut self.stats)?.unwrap()?;
+
+        let stats = {
+            self.stats.n_bitmap = bitmap.len();
+            self.stats.n_abytes =
+                self.vflusher.map(|f| f.to_start_fpos()).unwrap_or(0);
+            self.stats.clone()
+        };
+
+        self.root = root;
+        self.bitmap = bitmap;
+
+        self.build_flush();
+
+        Ok(stats)
+    }
+
+    fn build_tree<I>(iter: &mut BuildScan<K, V, I>) -> Result<u64>
+    where
+        K: Hash,
+        I: Iterator<Item = Result<Entry<K, V>>>,
+        E: Entry,
+    {
+        // return root
         todo!()
     }
+
+    fn build_flush(mut self) -> Result<(u64, u64)> {
+        let block = self.to_meta_blocks()?;
+        self.iflush.post(block)?;
+
+        let len1 = self.iflush.close()?;
+        let len2 = self.vflush.close()?;
+
+        Ok((len1, len2))
+    }
+
+    fn to_meta_blocks(&self, root: u64, bitmap: Vec<u8>) -> Result<Vec<u8>> {
+        let stats = {
+            let mut buf = vec![];
+            let val = self.stats.into_cbor();
+            val.encode(&mut buf)?;
+            buf
+        };
+
+        debug!(
+            target: "robt",
+            "{:?}, metablocks root:{} bitmap:{} meta:{}  stats:{}",
+            file, self.root, self.bitmap.len(), self.app_meta.len(), stats.len(),
+        );
+
+        let metas = vec![
+            MetaItem::Root(self.root),
+            MetaItem::Bitmap(self.bitmap.to_vec()),
+            MetaItem::AppMetadata(self.app_meta.clone()),
+            MetaItem::Stats(stats),
+        ];
+
+        let mut block = vec![];
+        let val = self.stats.into_cbor();
+        val.encode(&mut block)?;
+        block
+    }
+
+    fn compute_root_block(n: usize) -> usize {
+        if (n % Config::MARKER_BLOCK_SIZE) == 0 {
+            n
+        } else {
+            ((n / Config::MARKER_BLOCK_SIZE) + 1) * Config::MARKER_BLOCK_SIZE
+        }
+    }
+}
+
+/// Enumeration of meta items stored in [Robt] index.
+///
+/// [Robt] index is a fully packed immutable [Btree] index. To interpret
+/// the index a list of meta items are appended to the tip of index-file.
+///
+/// [Btree]: https://en.wikipedia.org/wiki/B-tree
+#[derive(Clone, Cborize)]
+pub enum MetaItem {
+    /// Contains index-statistics along with configuration values.
+    Stats(String),
+    /// Application supplied metadata, typically serialized and opaque
+    /// to [Rdms].
+    AppMetadata(Vec<u8>),
+    /// Probability data structure, only valid from read_meta_items().
+    Bitmap(Vec<u8>),
+    /// File-position where the root block for the Btree starts.
+    Root(u64),
 }
 
 /// Index type, immutable, durable, fully-packed and lockless reads.

@@ -95,6 +95,8 @@ macro_rules! err_at {
 mod entry;
 mod files;
 mod flush;
+mod nobitmap;
+mod scans;
 mod vlog;
 
 /// Type alias for Result return type, used by this package.

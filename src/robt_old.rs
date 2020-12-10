@@ -1348,14 +1348,11 @@ impl Config {
 /// Enumeration of meta items stored in [Robt] index.
 ///
 /// [Robt] index is a fully packed immutable [Btree] index. To interpret
-/// the index a list of meta items are appended to the tip
-/// of index-file.
+/// the index a list of meta items are appended to the tip of index-file.
 ///
 /// [Btree]: https://en.wikipedia.org/wiki/B-tree
-#[derive(Clone)]
+#[derive(Clone, Cborize)]
 pub enum MetaItem {
-    /// A Unique marker that confirms that index file is valid.
-    Marker(Vec<u8>), // tip of the file.
     /// Contains index-statistics along with configuration values.
     Stats(String),
     /// Application supplied metadata, typically serialized and opaque

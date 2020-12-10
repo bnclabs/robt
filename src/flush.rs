@@ -2,24 +2,33 @@ use fs2::FileExt;
 use log::{info, trace};
 use mkit::thread;
 
-use std::{convert::TryFrom, ffi, fs, path};
+use std::{convert::TryFrom, ffi, fs, mem, path};
 
 use crate::{Error, Result};
 
-struct Flusher {
-    file_path: ffi::OsString,
-    th: Option<thread::Thread<Vec<u8>, (), Result<u64>>>,
-    tx: thread::Tx<Vec<u8>, ()>,
+pub enum Flusher {
+    File {
+        file_path: ffi::OsString,
+        start_fpos: u64,
+        th: Option<thread::Thread<Vec<u8>, (), Result<u64>>>,
+        tx: Option<thread::Tx<Vec<u8>, ()>>,
+    },
+    None,
 }
 
 impl Drop for Flusher {
     fn drop(&mut self) {
-        info!(target: "robt", "dropping flusher for {:?}", self.file_path);
+        match self {
+            Flusher::File { file_path, .. } => {
+                info!( target: "robt", "dropping flusher for {:?}", file_path);
+            }
+            Flusher::None => (),
+        }
     }
 }
 
 impl Flusher {
-    fn new(
+    pub fn new(
         file_path: &ffi::OsStr,
         create: bool,
         flush_queue_size: usize,
@@ -40,16 +49,44 @@ impl Flusher {
             },
         );
 
-        let val = Flusher {
+        let val = Flusher::File {
             file_path: file_path.to_os_string(),
+            start_fpos: fpos,
             th: Some(th),
-            tx,
+            tx: Some(tx),
         };
+
         Ok(val)
     }
 
+    pub fn empty() -> Flusher {
+        Flusher::None
+    }
+
+    fn to_start_fpos(&self) -> u64 {
+        match self {
+            Flusher::File { start_fpos, .. } => *start_fpos,
+            Flusher::None => unreachable!(),
+        }
+    }
+
+    fn post(&self, data: Vec<u8>) -> Result<()> {
+        match self {
+            Flusher::File { tx, .. } => tx.as_ref().unwrap().post(data)?,
+            Flusher::None => unreachable!(),
+        }
+
+        Ok(())
+    }
+
     fn close(mut self) -> Result<u64> {
-        self.th.take().unwrap().join()?
+        match &mut self {
+            Flusher::File { tx, th, .. } => {
+                mem::drop(tx.take());
+                th.take().unwrap().join()?
+            }
+            Flusher::None => Ok(0),
+        }
     }
 }
 
@@ -59,7 +96,7 @@ fn thread_flush(
     rx: thread::Rx<Vec<u8>, ()>,
     mut fpos: u64,
 ) -> Result<u64> {
-    info!(target: "robt", "starting flusher for {:?}", file_path);
+    info!(target: "robt", "starting flusher for {:?} @ fpos {}", file_path, fpos);
 
     err_at!(
         IOError,
