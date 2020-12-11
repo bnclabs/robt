@@ -2,6 +2,8 @@ use mkit::Entry;
 
 use std::marker;
 
+use crate::marker::ROOT_MARKER;
+
 /// Default value for z-block-size, 4 * 1024 bytes.
 pub const ZBLOCKSIZE: usize = 4 * 1024; // 4KB leaf node
 /// Default value for m-block-size, 4 * 1024 bytes.
@@ -271,8 +273,9 @@ impl Builder<K, V, B> {
 
     fn build_flush(mut self) -> Result<(u64, u64)> {
         let block = self.to_meta_blocks()?;
-        // TODO: append block with size of block and marker, to make sure
-        // that a corrupt meta-blocks don't end up as valid meta-items.
+        block.extend_from_slice(&block.len().to_be_bytes());
+        block.extend_from_slice(&ROOT_MARKER);
+
         self.iflush.post(block)?;
 
         let len1 = self.iflush.close()?;

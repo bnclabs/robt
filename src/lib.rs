@@ -95,6 +95,7 @@ macro_rules! err_at {
 mod entry;
 mod files;
 mod flush;
+mod marker;
 mod nobitmap;
 mod scans;
 mod vlog;
