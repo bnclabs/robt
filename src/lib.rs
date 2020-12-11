@@ -14,13 +14,7 @@ macro_rules! read_file {
                     Ok(n) if buf.len() == n => Ok(buf),
                     Ok(n) => {
                         let m = buf.len();
-                        err_at!(
-                            Fatal,
-                            msg: concat!($msg, " {}/{} at {}"),
-                            m,
-                            n,
-                            $fpos
-                        )
+                        err_at!(Fatal, msg: concat!($msg, " {}/{} at {}"), m, n, $fpos)
                     }
                     Err(err) => err_at!(IOError, Err(err)),
                 }

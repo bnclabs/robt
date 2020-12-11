@@ -44,9 +44,7 @@ impl Flusher {
         let (th, tx) = thread::Thread::new_sync(
             "flusher",
             flush_queue_size,
-            move |rx: thread::Rx<Vec<u8>, ()>| {
-                move || thread_flush(ffpp, fd, rx, fpos)
-            },
+            move |rx: thread::Rx<Vec<u8>, ()>| move || thread_flush(ffpp, fd, rx, fpos),
         );
 
         let val = Flusher::File {

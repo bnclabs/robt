@@ -52,12 +52,7 @@ pub struct Config {
 
 impl Config {
     /// Configure differt set of block size for leaf-node, intermediate-node.
-    pub fn set_blocksize(
-        &mut self,
-        z: usize,
-        v: usize,
-        m: usize,
-    ) -> Result<&mut Self> {
+    pub fn set_blocksize(&mut self, z: usize, v: usize, m: usize) -> Result<&mut Self> {
         self.z_blocksize = z;
         self.v_blocksize = v;
         self.m_blocksize = m;
@@ -192,10 +187,8 @@ pub struct Builder<K, V, B = NoBitmap> {
 
 impl Builder<K, V, B> {
     pub fn initial(config: Config, app_meta: Vec<u8>) -> Builder {
-        let iflush =
-            Flusher::new(config.to_index_file(), true, config.flush_queue_size);
-        let vflush =
-            Flusher::new(config.to_vlog_file(), true, config.flush_queue_size);
+        let iflush = Flusher::new(config.to_index_file(), true, config.flush_queue_size);
+        let vflush = Flusher::new(config.to_vlog_file(), true, config.flush_queue_size);
 
         Builder {
             config,
@@ -212,10 +205,8 @@ impl Builder<K, V, B> {
     }
 
     pub fn incremental(config: Config, app_meta: Vec<u8>) -> Builder {
-        let iflush =
-            Flusher::new(config.to_index_file(), true, config.flush_queue_size);
-        let vflush =
-            Flusher::new(config.to_vlog_file(), true, config.flush_queue_size);
+        let iflush = Flusher::new(config.to_index_file(), true, config.flush_queue_size);
+        let vflush = Flusher::new(config.to_vlog_file(), true, config.flush_queue_size);
 
         Builder {
             config,
@@ -248,8 +239,7 @@ impl Builder<K, V, B> {
 
         let stats = {
             self.stats.n_bitmap = bitmap.len();
-            self.stats.n_abytes =
-                self.vflusher.map(|f| f.to_start_fpos()).unwrap_or(0);
+            self.stats.n_abytes = self.vflusher.map(|f| f.to_start_fpos()).unwrap_or(0);
             self.stats.clone()
         };
 
