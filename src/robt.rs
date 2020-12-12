@@ -171,16 +171,18 @@ pub struct Stats {
 }
 
 pub struct Builder<K, V, B = NoBitmap> {
+    // configuration
     config: Config,
-
+    // active values
     iflush: Flusher,
     vflush: Flusher,
-
     initial: bool,
-    root: u64,
+    // final result to be persisted
     app_meta: Vec<u8>,
-    bitmap: B,
     stats: Stats,
+    bitmap: B,
+    root: u64,
+
     _key: marker::PhantomData<K>,
     _value: marker::PhantomData<V>,
 }
@@ -262,9 +264,8 @@ impl Builder<K, V, B> {
     }
 
     fn build_flush(mut self) -> Result<(u64, u64)> {
-        let block = self.to_meta_blocks()?;
+        let mut block = self.to_meta_blocks()?;
         block.extend_from_slice(&block.len().to_be_bytes());
-        block.extend_from_slice(&ROOT_MARKER);
 
         self.iflush.post(block)?;
 
@@ -289,10 +290,11 @@ impl Builder<K, V, B> {
         );
 
         let metas = vec![
-            MetaItem::Root(self.root),
-            MetaItem::Bitmap(self.bitmap.to_vec()),
             MetaItem::AppMetadata(self.app_meta.clone()),
             MetaItem::Stats(stats),
+            MetaItem::Bitmap(self.bitmap.to_vec()),
+            MetaItem::Root(self.root),
+            MetaItem::Marker(ROOT_MARKER.clone()),
         ];
 
         let mut block = vec![];
@@ -318,15 +320,16 @@ impl Builder<K, V, B> {
 /// [Btree]: https://en.wikipedia.org/wiki/B-tree
 #[derive(Clone, Cborize)]
 pub enum MetaItem {
+    /// Application supplied metadata, typically serialized and opaque to `robt`.
+    AppMetadata(Vec<u8>),
     /// Contains index-statistics along with configuration values.
     Stats(String),
-    /// Application supplied metadata, typically serialized and opaque
-    /// to [Rdms].
-    AppMetadata(Vec<u8>),
-    /// Probability data structure, only valid from read_meta_items().
+    /// Bloom-filter.
     Bitmap(Vec<u8>),
     /// File-position where the root block for the Btree starts.
     Root(u64),
+    /// Finger print for robt.
+    Marker(Vec<u8>),
 }
 
 /// Index type, immutable, durable, fully-packed and lockless reads.
@@ -334,8 +337,23 @@ pub struct Index<K, V, B> {
     dir: ffi::OsString,
     name: Name,
     footprint: isize,
-
+    meta: Arc<Vec<MetaItem>>,
     stats: Stats,
-    meta: Vec<MetaItem>,
     bitmap: Arc<B>,
+}
+
+impl Clone for Index<K, V, B>
+where
+    B: Clone,
+{
+    fn clone(&self) -> Self {
+        Index {
+            dir: self.dir.clone(),
+            name: self.name.clone(),
+            footprint: self.footprint,
+            meta: Arc::clone(&self.meta),
+            stats: self.stats.clone(),
+            bitmap: self.bitmap.clone(),
+        }
+    }
 }
