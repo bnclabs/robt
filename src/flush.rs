@@ -68,14 +68,14 @@ impl Flusher {
         }
     }
 
-    fn to_start_fpos(&self) -> u64 {
+    pub fn to_start_fpos(&self) -> Option<u64> {
         match self {
-            Flusher::File { start_fpos, .. } => *start_fpos,
-            Flusher::None => unreachable!(),
+            Flusher::File { start_fpos, .. } => Some(*start_fpos),
+            Flusher::None => None,
         }
     }
 
-    fn post(&self, data: Vec<u8>) -> Result<()> {
+    pub fn post(&self, data: Vec<u8>) -> Result<()> {
         match self {
             Flusher::File { tx, .. } => tx.as_ref().unwrap().post(data)?,
             Flusher::None => unreachable!(),
@@ -84,7 +84,7 @@ impl Flusher {
         Ok(())
     }
 
-    fn close(mut self) -> Result<u64> {
+    pub fn close(mut self) -> Result<u64> {
         match &mut self {
             Flusher::File { tx, th, .. } => {
                 mem::drop(tx.take());

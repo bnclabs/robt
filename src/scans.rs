@@ -37,8 +37,8 @@ where
         }
     }
 
-    pub fn unwrap(self) -> Result<(I, B)> {
-        Ok((self.iter, self.bitmap))
+    pub fn unwrap(self) -> Result<(B, I)> {
+        Ok((self.bitmap, self.iter))
     }
 }
 
@@ -86,7 +86,7 @@ where
     I: Iterator<Item = Result<E>>,
     E: Entry<K, V>,
 {
-    fn new(iter: I, seqno: u64) -> BuildScan<K, V, I, E> {
+    pub fn new(iter: I, seqno: u64) -> BuildScan<K, V, I, E> {
         BuildScan {
             iter,
 
@@ -100,7 +100,7 @@ where
         }
     }
 
-    fn unwrap(self) -> Result<(u64, u64, u64, u64, u64, I)> {
+    pub fn unwrap(self) -> Result<(u64, u64, u64, u64, u64, I)> {
         let build_time = {
             let elapsed = err_at!(Fatal, self.start.elapsed())?;
             err_at!(FailConvert, u64::try_from(elapsed.as_nanos()))?
