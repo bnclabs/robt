@@ -8,5 +8,6 @@ edition = "2018"
 
 [dependencies]
 log = "0.4.11"
-mkit = { path = "../mkit" }
+lazy_static = "1.2.0"
+mkit = { path = "../mkit", version = "0.1.0" }
 fs2 = "0.4.3"

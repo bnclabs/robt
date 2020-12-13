@@ -3,7 +3,7 @@ use std::{convert::TryFrom, ffi, fmt, path, result};
 use crate::{Error, Result};
 
 #[derive(Clone)]
-struct IndexFileName(ffi::OsString);
+pub struct IndexFileName(pub ffi::OsString);
 
 impl From<String> for IndexFileName {
     fn from(name: String) -> IndexFileName {
@@ -18,17 +18,17 @@ impl TryFrom<IndexFileName> for String {
 
     fn try_from(fname: IndexFileName) -> Result<String> {
         let ffpp = path::Path::new(&fname.0);
-        let fname = || -> Option<String> {
+        let fname = || -> Option<&str> {
             let fname = ffpp.file_name()?;
             if fname.to_str()?.ends_with("-robt.indx") {
-                Some(path::Path::new(fname).file_stem()?.to_str()?.to_string())
+                Some(path::Path::new(fname).file_stem()?.to_str()?)
             } else {
                 None
             }
         }();
 
         match fname {
-            Some(fname) => Ok(fname),
+            Some(fname) => Ok(fname.strip_suffix("-robt.indx").unwrap().to_string()),
             None => err_at!(InvalidFile, msg: "{:?}", ffpp),
         }
     }
@@ -50,7 +50,7 @@ impl fmt::Display for IndexFileName {
 }
 
 #[derive(Clone)]
-struct VlogFileName(ffi::OsString);
+pub struct VlogFileName(pub ffi::OsString);
 
 impl From<String> for VlogFileName {
     fn from(name: String) -> VlogFileName {
@@ -60,23 +60,29 @@ impl From<String> for VlogFileName {
     }
 }
 
+impl From<VlogFileName> for ffi::OsString {
+    fn from(val: VlogFileName) -> ffi::OsString {
+        val.0
+    }
+}
+
 impl TryFrom<VlogFileName> for String {
     type Error = Error;
 
     fn try_from(fname: VlogFileName) -> Result<String> {
         let ffpp = path::Path::new(&fname.0);
 
-        let fname = || -> Option<String> {
+        let fname = || -> Option<&str> {
             let fname = ffpp.file_name()?;
             if fname.to_str()?.ends_with("-robt.vlog") {
-                Some(path::Path::new(fname).file_stem()?.to_str()?.to_string())
+                Some(path::Path::new(fname).file_stem()?.to_str()?)
             } else {
                 None
             }
         }();
 
         match fname {
-            Some(fname) => Ok(fname),
+            Some(fname) => Ok(fname.strip_suffix("-robt.vlog").unwrap().to_string()),
             None => err_at!(InvalidFile, msg: "{:?}", ffpp),
         }
     }

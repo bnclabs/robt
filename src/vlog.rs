@@ -72,7 +72,8 @@ where
         match self {
             Value::N(_) => Ok(self),
             Value::R(ValueRef { fpos, length }) => {
-                let block = read_file!(fd, fpos, length, "reading value from vlog")?;
+                let seek = io::SeekFrom::Start(fpos);
+                let block = read_file!(fd, seek, length, "reading value from vlog")?;
                 Ok(Self::decode(&mut block.as_slice())?.0)
             }
         }
@@ -179,7 +180,8 @@ where
         match self {
             Delta::N(_) => Ok(self),
             Delta::R(DeltaRef { fpos, length }) => {
-                let block = read_file!(fd, fpos, length, "reading delta from vlog")?;
+                let seek = io::SeekFrom::Start(fpos);
+                let block = read_file!(fd, seek, length, "reading delta from vlog")?;
                 Ok(Self::decode(&mut block.as_slice())?.0)
             }
         }

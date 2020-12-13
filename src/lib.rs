@@ -1,20 +1,20 @@
 use std::{error, fmt, result};
 
 macro_rules! read_file {
-    ($fd:expr, $fpos:expr, $n:expr, $msg:expr) => {{
-        use std::io::{Read, Seek};
-        match $fd.seek(io::SeekFrom::Start($fpos)) {
+    ($fd:expr, $seek:expr, $n:expr, $msg:expr) => {{
+        use std::{
+            convert::TryFrom,
+            io::{Read, Seek},
+        };
+
+        match $fd.seek($seek) {
             Ok(_) => {
-                let mut buf = {
-                    let mut buf = Vec::with_capacity($n as usize);
-                    buf.resize(buf.capacity(), 0);
-                    buf
-                };
+                let mut buf = vec![0; usize::try_from($n).unwrap()];
                 match $fd.read(&mut buf) {
                     Ok(n) if buf.len() == n => Ok(buf),
                     Ok(n) => {
                         let m = buf.len();
-                        err_at!(Fatal, msg: concat!($msg, " {}/{} at {}"), m, n, $fpos)
+                        err_at!(Fatal, msg: concat!($msg, " {}/{} at {:?}"), m, n, $seek)
                     }
                     Err(err) => err_at!(IOError, Err(err)),
                 }
@@ -91,7 +91,9 @@ mod files;
 mod flush;
 mod marker;
 mod nobitmap;
+mod robt;
 mod scans;
+mod util;
 mod vlog;
 
 /// Type alias for Result return type, used by this package.

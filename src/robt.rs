@@ -1,8 +1,16 @@
-use mkit::Entry;
+use log::debug;
+use mkit::{cbor::Cbor, Cborize, Entry};
 
-use std::marker;
+use std::{ffi, fs, hash::Hash, io, marker, path, sync::Arc};
 
-use crate::marker::ROOT_MARKER;
+use crate::{
+    files::{IndexFileName, VlogFileName},
+    flush::Flusher,
+    marker::ROOT_MARKER,
+    nobitmap::NoBitmap,
+    scans::{BitmappedScan, BuildScan},
+    util, Error, Result,
+};
 
 /// Default value for z-block-size, 4 * 1024 bytes.
 pub const ZBLOCKSIZE: usize = 4 * 1024; // 4KB leaf node
@@ -51,6 +59,20 @@ pub struct Config {
 }
 
 impl Config {
+    fn new(dir: &ffi::OsStr, name: &str) -> Config {
+        Config {
+            dir: dir.to_os_string(),
+            name: name.to_string(),
+            z_blocksize: ZBLOCKSIZE,
+            m_blocksize: MBLOCKSIZE,
+            v_blocksize: VBLOCKSIZE,
+            delta_ok: true,
+            value_in_vlog: false,
+            vlog_file: None,
+            flush_queue_size: FLUSH_QUEUE_SIZE,
+        }
+    }
+
     /// Configure differt set of block size for leaf-node, intermediate-node.
     pub fn set_blocksize(&mut self, z: usize, v: usize, m: usize) -> Result<&mut Self> {
         self.z_blocksize = z;
@@ -109,7 +131,7 @@ impl Config {
             [self.dir, IndexFileName::from(self.name.clone()).into()]
                 .iter()
                 .collect();
-        file_path.to_os_string()
+        file_path.into_os_string()
     }
 
     fn to_vlog_file(&self) -> ffi::OsString {
@@ -117,7 +139,7 @@ impl Config {
             [self.dir, VlogFileName::from(self.name.clone()).into()]
                 .iter()
                 .collect();
-        file_path.to_os_string()
+        file_path.into_os_string()
     }
 }
 
@@ -170,6 +192,10 @@ pub struct Stats {
     pub epoch: i128,
 }
 
+impl Stats {
+    const ID: u32 = 0x0;
+}
+
 pub struct Builder<K, V, B = NoBitmap> {
     // configuration
     config: Config,
@@ -187,15 +213,15 @@ pub struct Builder<K, V, B = NoBitmap> {
     _value: marker::PhantomData<V>,
 }
 
-impl Builder<K, V, B> {
-    pub fn initial(config: Config, app_meta: Vec<u8>) -> Builder {
+impl<K, V, B> Builder<K, V, B> {
+    pub fn initial(config: Config, app_meta: Vec<u8>) -> Builder<K, V, B> {
         let iflush = Flusher::new(config.to_index_file(), true, config.flush_queue_size);
         let vflush = Flusher::new(config.to_vlog_file(), true, config.flush_queue_size);
 
         Builder {
             config,
             iflush,
-            ivlush,
+            vflush,
             stats: Stats::default(),
 
             initial: true,
@@ -206,14 +232,14 @@ impl Builder<K, V, B> {
         }
     }
 
-    pub fn incremental(config: Config, app_meta: Vec<u8>) -> Builder {
+    pub fn incremental(config: Config, app_meta: Vec<u8>) -> Builder<K, V, B> {
         let iflush = Flusher::new(config.to_index_file(), true, config.flush_queue_size);
         let vflush = Flusher::new(config.to_vlog_file(), true, config.flush_queue_size);
 
         Builder {
             config,
             iflush,
-            ivlush,
+            vflush,
             stats: Stats::default(),
 
             initial: false,
@@ -225,18 +251,18 @@ impl Builder<K, V, B> {
     }
 }
 
-impl Builder<K, V, B> {
-    pub fn build_from_iter<I, E>(iter: I) -> Result<Stats>
+impl<K, V, B> Builder<K, V, B> {
+    pub fn build_from_iter<I, E>(self, iter: I) -> Result<Stats>
     where
         K: Hash,
-        I: Iterator<Item = Result<Entry<K, V>>>,
-        E: Entry,
+        I: Iterator<Item = Result<E>>,
+        E: Entry<K, V>,
     {
         let mut iter = {
             let seqno = 0_64;
-            BuildScan::new(scans::BitmappedScan::new(iter), seqno)
+            BuildScan::new(BitmappedScan::new(iter), seqno)
         };
-        let root = 0_u64; // self.build_tree(&mut iter)?;
+        let root = self.build_tree(&mut iter)?;
         let (_, bitmap) = iter.unwrap_with(&mut self.stats)?.unwrap()?;
 
         let stats = {
@@ -253,11 +279,11 @@ impl Builder<K, V, B> {
         Ok(stats)
     }
 
-    fn build_tree<I>(iter: &mut BuildScan<K, V, I>) -> Result<u64>
+    fn build_tree<I, E>(iter: &mut BuildScan<K, V, I, E>) -> Result<u64>
     where
         K: Hash,
-        I: Iterator<Item = Result<Entry<K, V>>>,
-        E: Entry,
+        I: Iterator<Item = Result<E>>,
+        E: Entry<K, V>,
     {
         // return root
         todo!()
@@ -265,7 +291,7 @@ impl Builder<K, V, B> {
 
     fn build_flush(mut self) -> Result<(u64, u64)> {
         let mut block = self.to_meta_blocks()?;
-        block.extend_from_slice(&block.len().to_be_bytes());
+        block.extend_from_slice(&(u64::try_from(block.len()).unwrap().to_be_bytes()));
 
         self.iflush.post(block)?;
 
@@ -276,17 +302,13 @@ impl Builder<K, V, B> {
     }
 
     fn to_meta_blocks(&self, root: u64, bitmap: Vec<u8>) -> Result<Vec<u8>> {
-        let stats = {
-            let mut buf = vec![];
-            let val = self.stats.into_cbor();
-            val.encode(&mut buf)?;
-            buf
-        };
+        let stats = util::encode_to_cbor(self.stats.clone())?;
 
         debug!(
             target: "robt",
             "{:?}, metablocks root:{} bitmap:{} meta:{}  stats:{}",
-            file, self.root, self.bitmap.len(), self.app_meta.len(), stats.len(),
+            self.iflush.to_file_path(), self.root, self.bitmap.len(),
+            self.app_meta.len(), stats.len(),
         );
 
         let metas = vec![
@@ -297,10 +319,7 @@ impl Builder<K, V, B> {
             MetaItem::Marker(ROOT_MARKER.clone()),
         ];
 
-        let mut block = vec![];
-        let val = self.stats.into_cbor();
-        val.encode(&mut block)?;
-        block
+        util::encode_to_cbor(metas)
     }
 
     fn compute_root_block(n: usize) -> usize {
@@ -335,17 +354,20 @@ pub enum MetaItem {
 /// Index type, immutable, durable, fully-packed and lockless reads.
 pub struct Index<K, V, B> {
     dir: ffi::OsString,
-    name: Name,
+    name: String,
     footprint: isize,
     meta: Arc<Vec<MetaItem>>,
     stats: Stats,
     bitmap: Arc<B>,
+
+    index: fs::File,
+    vlog: Option<fs::File>,
+
+    _key: marker::PhantomData<K>,
+    _value: marker::PhantomData<V>,
 }
 
-impl Clone for Index<K, V, B>
-where
-    B: Clone,
-{
+impl<K, V, B> Clone for Index<K, V, B> {
     fn clone(&self) -> Self {
         Index {
             dir: self.dir.clone(),
@@ -353,7 +375,76 @@ where
             footprint: self.footprint,
             meta: Arc::clone(&self.meta),
             stats: self.stats.clone(),
-            bitmap: self.bitmap.clone(),
+            bitmap: Arc::clone(&self.bitmap),
         }
+    }
+}
+
+impl<K, V, B> Index<K, V, B> {
+    pub fn open(dir: &ffi::OsStr, name: &str) -> Result<Index<K, V, B>> {
+        let ip = Self::find_index_file(dir, name)
+            .ok_or(err_at!(Invalid, msg: "bad file {:?}/{}", dir, name).unwrap_err())?;
+
+        let fd = err_at!(IOError, fs::OpenOptions::new().read(true).open(&ip))?;
+
+        let n = {
+            let seek = io::SeekFrom::End(-8);
+            u64::from_be_bytes(&read_file!(fd, seek, 8, "reading meta-len from index")?)
+        };
+        let seek = io::SeekFrom::End(-8 - n);
+        let block = read_file!(fd, seek, n, "reading meta-data from index")?;
+        let metas = Vec::<MetaItem>::from_cbor(Cbor::decode(&mut block)?)?;
+
+        let stats = match &metas[1] {
+            MetaItem::Stats(stats) => Stats::from_cbor(Cbor::decode(&mut stats)?)?,
+            _ => unreachable!(),
+        };
+
+        let bitmap = match &metas[2] {
+            MetaItem::Bitmap(data) => B::from_vec(data)?,
+            _ => unreachable!(),
+        };
+
+        let vlog = match stats.value_in_vlog {
+            true => {
+                let vlog_file = stats.vlog_file.as_ref();
+                let file_name = match vlog_file.map(|f| path::Path::new(f).file_name()) {
+                    Some(Some(file_name)) => file_name,
+                    None => ffi::OsString::from(VlogFileName::from(name.to_string())),
+                };
+                let vp: path::PathBuf = [dir.to_os_string(), vlog_file].iter().collect();
+                err_at!(IOError, fs::OpenOptions::new().read(true).open(&vp))?
+            }
+            false => None,
+        };
+
+        let val = Index {
+            dir: dir.to_os_string(),
+            name: name.to_string(),
+            footprint: isize::try_from(err_at!(IOError, fd.metadata())?.len()).unwrap(),
+            meta: Arc::new(metas),
+            stats,
+            bitmap: Arc::new(bitmap),
+
+            index: fd,
+            vlog,
+        };
+
+        Ok(val)
+    }
+
+    fn find_index_file(dir: &ffi::OsStr, name: &str) -> Option<ffi::OsString> {
+        let iter = err_at!(IOError, fs::read_dir(dir))?;
+        let entry = iter
+            .filter(|entry| entry.ok())
+            .filter_map(|entry| {
+                match String::try_from(IndexFileName(entry.file_name())) {
+                    Ok(nm) if nm == name => Some(entry),
+                    Err(_) => None,
+                }
+            })
+            .next();
+
+        entry.map(|entry| entry.file_name())
     }
 }

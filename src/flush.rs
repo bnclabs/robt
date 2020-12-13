@@ -61,6 +61,13 @@ impl Flusher {
         Flusher::None
     }
 
+    pub fn to_file_path(&self) -> ffi::OsString {
+        match self {
+            Flusher::File { file_path, .. } => file_path.clone(),
+            Flusher::None => unreachable!(),
+        }
+    }
+
     fn to_start_fpos(&self) -> u64 {
         match self {
             Flusher::File { start_fpos, .. } => *start_fpos,

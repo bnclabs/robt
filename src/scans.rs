@@ -65,7 +65,7 @@ where
 
 /// Iterator wrapper, to wrap full-table scanners and count seqno,
 /// index-items, deleted items and epoch.
-struct BuildScan<K, V, I, E>
+pub struct BuildScan<K, V, I, E>
 where
     I: Iterator<Item = Result<E>>,
     E: Entry<K, V>,
