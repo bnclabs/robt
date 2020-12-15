@@ -240,10 +240,10 @@ impl<K, V, B> Builder<K, V, B> {
             config,
             iflush,
             vflush,
-            stats: Stats::default(),
-
             initial: true,
+
             app_meta,
+            stats: Stats::default(),
             bitmap: B::create(),
             root: u64::default(),
 
@@ -260,16 +260,16 @@ impl<K, V, B> Builder<K, V, B> {
     {
         let queue_size = config.flush_queue_size;
         let iflush = Flusher::new(&config.to_index_file(), true, queue_size)?;
-        let vflush = Flusher::new(&config.to_vlog_file(), true, queue_size)?;
+        let vflush = Flusher::new(&config.to_vlog_file(), false, queue_size)?;
 
         let val = Builder {
             config,
             iflush,
             vflush,
-            stats: Stats::default(),
-
             initial: false,
+
             app_meta,
+            stats: Stats::default(),
             bitmap: B::create(),
             root: u64::default(),
 
@@ -403,7 +403,8 @@ pub struct Index<K, V, B> {
     dir: ffi::OsString,
     name: String,
     footprint: isize,
-    meta: Arc<Vec<MetaItem>>,
+
+    metas: Arc<Vec<MetaItem>>,
     stats: Stats,
     bitmap: Arc<B>,
 
@@ -419,21 +420,21 @@ impl<K, V, B> Index<K, V, B> {
     where
         B: Bloom,
     {
-        let ip = match Self::find_index_file(dir, name) {
-            Some(ip) => ip,
+        let mut ifd = match Self::find_index_file(dir, name) {
+            Some(ip) => err_at!(IOError, fs::OpenOptions::new().read(true).open(&ip))?,
             None => err_at!(Invalid, msg: "bad file {:?}/{}", dir, name)?,
         };
 
-        let mut fd = err_at!(IOError, fs::OpenOptions::new().read(true).open(&ip))?;
-
-        let n = {
-            let seek = io::SeekFrom::End(-8);
-            let data = read_file!(fd, seek, 8, "reading meta-len from index")?;
-            u64::from_be_bytes(data.try_into().unwrap())
+        let metas = {
+            let n = {
+                let seek = io::SeekFrom::End(-8);
+                let data = read_file!(ifd, seek, 8, "reading meta-len from index")?;
+                u64::from_be_bytes(data.try_into().unwrap())
+            };
+            let seek = io::SeekFrom::End(-8 - i64::try_from(n).unwrap());
+            let block = read_file!(ifd, seek, n, "reading meta-data from index")?;
+            Vec::<MetaItem>::from_cbor(Cbor::decode(&mut block.as_slice())?.0)?
         };
-        let seek = io::SeekFrom::End(-8 - i64::try_from(n).unwrap());
-        let block = read_file!(fd, seek, n, "reading meta-data from index")?;
-        let metas = Vec::<MetaItem>::from_cbor(Cbor::decode(&mut block.as_slice())?.0)?;
 
         let stats = match &metas[1] {
             MetaItem::Stats(stats) => {
@@ -447,6 +448,12 @@ impl<K, V, B> Index<K, V, B> {
             MetaItem::Bitmap(data) => B::from_vec(&data)?,
             _ => unreachable!(),
         };
+
+        if let MetaItem::Marker(mrkr) = &metas[4] {
+            if mrkr.ne(ROOT_MARKER.as_slice()) {
+                err_at!(Invalid, msg: "invalid marker {:?}", mrkr)?
+            }
+        }
 
         let vlog = match stats.value_in_vlog {
             true => {
@@ -467,12 +474,54 @@ impl<K, V, B> Index<K, V, B> {
         let val = Index {
             dir: dir.to_os_string(),
             name: name.to_string(),
-            footprint: isize::try_from(err_at!(IOError, fd.metadata())?.len()).unwrap(),
-            meta: Arc::new(metas),
+            footprint: isize::try_from(err_at!(IOError, ifd.metadata())?.len()).unwrap(),
+
+            metas: Arc::new(metas),
             stats,
             bitmap: Arc::new(bitmap),
 
-            index: fd,
+            index: ifd,
+            vlog,
+
+            _key: marker::PhantomData,
+            _val: marker::PhantomData,
+        };
+
+        Ok(val)
+    }
+
+    pub fn clone(&self) -> Result<Self> {
+        let mut index = match Self::find_index_file(&self.dir, &self.name) {
+            Some(ip) => err_at!(IOError, fs::OpenOptions::new().read(true).open(&ip))?,
+            None => err_at!(Invalid, msg: "bad file {:?}/{}", &self.dir, &self.name)?,
+        };
+
+        let vlog = match self.stats.value_in_vlog {
+            true => {
+                let vlog_file = self.stats.vlog_file.as_ref();
+                let fnm = match vlog_file.map(|f| path::Path::new(f).file_name()) {
+                    Some(Some(fnm)) => fnm.to_os_string(),
+                    _ => ffi::OsString::from(VlogFileName::from(self.name.to_string())),
+                };
+                let vp: path::PathBuf = [self.dir.to_os_string(), fnm].iter().collect();
+                Some(err_at!(
+                    IOError,
+                    fs::OpenOptions::new().read(true).open(&vp)
+                )?)
+            }
+            false => None,
+        };
+
+        let val = Index {
+            dir: self.dir.clone(),
+            name: self.name.clone(),
+            footprint: self.footprint,
+
+            metas: Arc::clone(&self.metas),
+            stats: self.stats.clone(),
+            bitmap: Arc::clone(&self.bitmap),
+
+            index,
             vlog,
 
             _key: marker::PhantomData,
@@ -496,4 +545,21 @@ impl<K, V, B> Index<K, V, B> {
 
         entry.map(|entry| entry.file_name())
     }
+}
+
+impl<K, V, B> Index<K, V, B> {
+    fn to_app_meta(&self) -> Vec<u8> {
+        match &self.metas[0] {
+            MetaItem::AppMetadata(data) => data.clone(),
+            _ => unreachable!(),
+        }
+    }
+
+    fn to_seqno(&self) -> u64 {
+        self.stats.seqno
+    }
+}
+
+fn validatei<K, V, B>(index: &Index<K, V, B>) -> Result<()> {
+    todo!()
 }
