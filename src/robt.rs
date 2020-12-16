@@ -1,8 +1,9 @@
+use fs2::FileExt;
 use log::debug;
 use mkit::{
     self,
     cbor::{Cbor, FromCbor},
-    traits::Bloom,
+    traits::{Bloom, Footprint},
     Cborize, Entry,
 };
 
@@ -382,7 +383,7 @@ impl MetaItem {
 pub struct Index<K, V, B> {
     dir: ffi::OsString,
     name: String,
-    footprint: isize,
+    footprint: usize,
 
     metas: Arc<Vec<MetaItem>>,
     stats: Stats,
@@ -395,6 +396,12 @@ pub struct Index<K, V, B> {
     _val: marker::PhantomData<V>,
 }
 
+impl<K, V, B> Footprint for Index<K, V, B> {
+    fn footprint(&self) -> mkit::Result<usize> {
+        Ok(self.footprint)
+    }
+}
+
 impl<K, V, B> Index<K, V, B> {
     pub fn open(dir: &ffi::OsStr, name: &str) -> Result<Index<K, V, B>>
     where
@@ -404,6 +411,7 @@ impl<K, V, B> Index<K, V, B> {
             Some(ip) => err_at!(IOError, fs::OpenOptions::new().read(true).open(&ip))?,
             None => err_at!(Invalid, msg: "bad file {:?}/{}", dir, name)?,
         };
+        err_at!(IOError, ifd.lock_shared())?;
 
         let metas = {
             let n = {
@@ -443,10 +451,9 @@ impl<K, V, B> Index<K, V, B> {
                     _ => ffi::OsString::from(VlogFileName::from(name.to_string())),
                 };
                 let vp: path::PathBuf = [dir.to_os_string(), file_name].iter().collect();
-                Some(err_at!(
-                    IOError,
-                    fs::OpenOptions::new().read(true).open(&vp)
-                )?)
+                let vlog = err_at!(IOError, fs::OpenOptions::new().read(true).open(&vp))?;
+                err_at!(IOError, vlog.lock_shared())?;
+                Some(vlog)
             }
             false => None,
         };
@@ -454,7 +461,7 @@ impl<K, V, B> Index<K, V, B> {
         let val = Index {
             dir: dir.to_os_string(),
             name: name.to_string(),
-            footprint: isize::try_from(err_at!(IOError, ifd.metadata())?.len()).unwrap(),
+            footprint: usize::try_from(err_at!(IOError, ifd.metadata())?.len()).unwrap(),
 
             metas: Arc::new(metas),
             stats,
@@ -511,7 +518,12 @@ impl<K, V, B> Index<K, V, B> {
         Ok(val)
     }
 
-    fn compact(self, dir: &ffi::OsStr, name: &str, cutoff: mkit::Cutoff) -> Result<Self>
+    pub fn compact(
+        self,
+        dir: &ffi::OsStr,
+        name: &str,
+        cutoff: mkit::Cutoff,
+    ) -> Result<Self>
     where
         K: Hash,
         V: mkit::Diff,
@@ -534,6 +546,22 @@ impl<K, V, B> Index<K, V, B> {
         Index::open(dir, name)
     }
 
+    pub fn close(self) -> Result<()> {
+        Ok(())
+    }
+
+    pub fn purge(self) -> Result<()> {
+        let index_file = to_index_file(&self.dir, &self.name);
+        purge_file(index_file)?;
+
+        if self.stats.value_in_vlog || self.stats.delta_ok {
+            let vlog_file = to_vlog_file(&self.dir, &self.name);
+            purge_file(vlog_file)?;
+        }
+
+        Ok(())
+    }
+
     fn find_index_file(dir: &ffi::OsStr, name: &str) -> Option<ffi::OsString> {
         let iter = fs::read_dir(dir).ok()?;
         let entry = iter
@@ -551,6 +579,10 @@ impl<K, V, B> Index<K, V, B> {
 }
 
 impl<K, V, B> Index<K, V, B> {
+    pub fn to_name(&self) -> String {
+        self.name.clone()
+    }
+
     pub fn to_app_meta(&self) -> Vec<u8> {
         match &self.metas[0] {
             MetaItem::AppMetadata(data) => data.clone(),
@@ -629,4 +661,28 @@ fn to_vlog_file(dir: &ffi::OsStr, name: &str) -> ffi::OsString {
     .iter()
     .collect();
     file_path.into_os_string()
+}
+
+fn purge_file(file: ffi::OsString) -> Result<&'static str> {
+    let fd = open_file_r(&file)?;
+    match fd.try_lock_exclusive() {
+        Ok(_) => {
+            err_at!(IOError, fs::remove_file(&file), "remove file {:?}", file)?;
+            debug!(target: "robt", "purged file {:?}", file);
+            fd.unlock().ok();
+            Ok("ok")
+        }
+        Err(_) => {
+            debug!(target: "robt", "locked file {:?}", file);
+            Ok("locked")
+        }
+    }
+}
+
+fn open_file_r(file: &ffi::OsStr) -> Result<fs::File> {
+    let os_file = path::Path::new(file);
+    Ok(err_at!(
+        IOError,
+        fs::OpenOptions::new().read(true).open(os_file)
+    )?)
 }

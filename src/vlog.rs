@@ -1,4 +1,5 @@
 use mkit::{
+    self,
     cbor::{Cbor, FromCbor, IntoCbor},
     Cborize, Footprint,
 };
@@ -43,11 +44,12 @@ impl<V> Footprint for Value<V>
 where
     V: Footprint,
 {
-    fn footprint(&self) -> usize {
-        match self {
-            Value::N(ValueVal { value }) => value.footprint(),
+    fn footprint(&self) -> mkit::Result<usize> {
+        let val = match self {
+            Value::N(ValueVal { value }) => value.footprint()?,
             Value::R(refr) => mem::size_of_val(refr),
-        }
+        };
+        Ok(val)
     }
 }
 
@@ -128,11 +130,12 @@ impl<D> Footprint for Delta<D>
 where
     D: Footprint,
 {
-    fn footprint(&self) -> usize {
-        match self {
-            Delta::N(DeltaVal { diff }) => diff.footprint(),
+    fn footprint(&self) -> mkit::Result<usize> {
+        let val = match self {
+            Delta::N(DeltaVal { diff }) => diff.footprint()?,
             Delta::R(refr) => mem::size_of_val(refr),
-        }
+        };
+        Ok(val)
     }
 }
 
