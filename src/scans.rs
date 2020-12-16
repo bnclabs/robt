@@ -1,4 +1,7 @@
-use mkit::traits::{Bloom, Entry};
+use mkit::{
+    self,
+    traits::{Bloom, Entry},
+};
 
 use std::{cmp, convert::TryFrom, hash, marker, time};
 
@@ -139,6 +142,61 @@ where
                 Some(Ok(entry))
             }
             Err(err) => Some(Err(err)),
+        }
+    }
+}
+
+/// Iterator type, for continuous full table iteration filtering out
+/// older mutations.
+pub struct CompactScan<K, V, I, E>
+where
+    I: Iterator<Item = Result<E>>,
+    E: Entry<K, V>,
+{
+    iter: I,
+    cutoff: mkit::Cutoff,
+
+    _key: marker::PhantomData<K>,
+    _val: marker::PhantomData<V>,
+}
+
+impl<K, V, I, E> CompactScan<K, V, I, E>
+where
+    I: Iterator<Item = Result<E>>,
+    E: Entry<K, V>,
+{
+    pub fn new(iter: I, cutoff: mkit::Cutoff) -> CompactScan<K, V, I, E> {
+        CompactScan {
+            iter,
+            cutoff,
+            _key: marker::PhantomData,
+            _val: marker::PhantomData,
+        }
+    }
+
+    pub fn unwrap(self) -> I {
+        self.iter
+    }
+}
+
+impl<K, V, I, E> Iterator for CompactScan<K, V, I, E>
+where
+    I: Iterator<Item = Result<E>>,
+    E: Entry<K, V>,
+{
+    type Item = Result<E>;
+
+    #[inline]
+    fn next(&mut self) -> Option<Self::Item> {
+        loop {
+            match self.iter.next() {
+                Some(Ok(entry)) => match entry.purge(self.cutoff) {
+                    Some(entry) => break Some(Ok(entry)),
+                    None => (),
+                },
+                Some(Err(err)) => break Some(Err(err)),
+                None => break None,
+            }
         }
     }
 }

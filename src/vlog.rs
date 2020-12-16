@@ -1,6 +1,6 @@
 use mkit::{
     cbor::{Cbor, FromCbor, IntoCbor},
-    Cborize, Diff, Footprint,
+    Cborize, Footprint,
 };
 
 use std::{fs, io, mem};
@@ -96,37 +96,21 @@ where
 }
 
 #[derive(Clone, Cborize)]
-pub enum Delta<V>
-where
-    V: Diff + FromCbor + IntoCbor,
-    <V as Diff>::D: FromCbor + IntoCbor,
-{
-    N(DeltaVal<V>),
+pub enum Delta<D> {
+    N(DeltaVal<D>),
     R(DeltaRef),
 }
 
-impl<V> Delta<V>
-where
-    V: Diff + FromCbor + IntoCbor,
-    <V as Diff>::D: FromCbor + IntoCbor,
-{
+impl<D> Delta<D> {
     const ID: u32 = DELTA_VER1;
 }
 
 #[derive(Clone, Cborize)]
-pub struct DeltaVal<V>
-where
-    V: Diff + FromCbor + IntoCbor,
-    <V as Diff>::D: FromCbor + IntoCbor,
-{
-    diff: <V as Diff>::D,
+pub struct DeltaVal<D> {
+    diff: D,
 }
 
-impl<V> DeltaVal<V>
-where
-    V: Diff + FromCbor + IntoCbor,
-    <V as Diff>::D: FromCbor + IntoCbor,
-{
+impl<D> DeltaVal<D> {
     const ID: u32 = DELTA_VER1;
 }
 
@@ -140,10 +124,9 @@ impl DeltaRef {
     const ID: u32 = DELTA_VER1;
 }
 
-impl<V> Footprint for Delta<V>
+impl<D> Footprint for Delta<D>
 where
-    V: Diff + FromCbor + IntoCbor,
-    <V as Diff>::D: FromCbor + IntoCbor,
+    D: Footprint,
 {
     fn footprint(&self) -> usize {
         match self {
@@ -153,12 +136,8 @@ where
     }
 }
 
-impl<V> Delta<V>
-where
-    V: Diff + FromCbor + IntoCbor,
-    <V as Diff>::D: FromCbor + IntoCbor,
-{
-    pub fn new_value(diff: <V as Diff>::D) -> Self {
+impl<D> Delta<D> {
+    pub fn new_value(diff: D) -> Self {
         Delta::N(DeltaVal { diff })
     }
 
@@ -167,15 +146,10 @@ where
     }
 }
 
-impl<V> Delta<V>
-where
-    V: Diff + FromCbor + IntoCbor,
-    <V as Diff>::D: FromCbor + IntoCbor,
-{
+impl<D> Delta<D> {
     pub fn fetch(self, fd: &mut fs::File) -> Result<Self>
     where
-        V: Diff,
-        <V as Diff>::D: FromCbor,
+        D: FromCbor,
     {
         match self {
             Delta::N(_) => Ok(self),
@@ -190,6 +164,7 @@ where
     pub fn encode<W>(self, buf: &mut W) -> Result<usize>
     where
         W: io::Write,
+        D: IntoCbor,
     {
         Ok(self.into_cbor()?.encode(buf)?)
     }
@@ -197,6 +172,7 @@ where
     pub fn decode<R>(buf: &mut R) -> Result<(Self, usize)>
     where
         R: io::Read,
+        D: FromCbor,
     {
         let (val, n) = Cbor::decode(buf)?;
         Ok((Delta::from_cbor(val)?, n))

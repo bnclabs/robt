@@ -1,5 +1,6 @@
 use log::debug;
 use mkit::{
+    self,
     cbor::{Cbor, FromCbor},
     traits::Bloom,
     Cborize, Entry,
@@ -18,7 +19,7 @@ use crate::{
     flush::Flusher,
     marker::ROOT_MARKER,
     nobitmap::NoBitmap,
-    scans::{BitmappedScan, BuildScan},
+    scans::{BitmappedScan, BuildScan, CompactScan},
     util, Error, Result,
 };
 
@@ -60,10 +61,6 @@ pub struct Config {
     /// value log file. Otherwise value shall be saved in the index's
     /// leaf node. Default: false
     pub value_in_vlog: bool,
-    /// Optional value log file name. If not supplied, but `delta_ok` or
-    /// `value_in_vlog` is true, then value log file name will be computed
-    /// based on configuration `name` and `dir`. Default: None
-    pub vlog_file: Option<ffi::OsString>,
     /// Flush queue size. Default: Config::FLUSH_QUEUE_SIZE
     pub flush_queue_size: usize,
 }
@@ -78,82 +75,36 @@ impl Config {
             v_blocksize: VBLOCKSIZE,
             delta_ok: true,
             value_in_vlog: false,
-            vlog_file: None,
             flush_queue_size: FLUSH_QUEUE_SIZE,
         }
     }
 
     /// Configure differt set of block size for leaf-node, intermediate-node.
-    pub fn set_blocksize(&mut self, z: usize, v: usize, m: usize) -> Result<&mut Self> {
+    pub fn set_blocksize(&mut self, z: usize, v: usize, m: usize) -> &mut Self {
         self.z_blocksize = z;
         self.v_blocksize = v;
         self.m_blocksize = m;
-        Ok(self)
+        self
     }
 
-    /// Enable delta persistence, and configure value-log-file. To disable
-    /// delta persistance, pass `vlog_file` as None.
-    pub fn set_delta(
-        &mut self,
-        ok: bool,
-        vlog_file: Option<ffi::OsString>,
-    ) -> Result<&mut Self> {
-        match vlog_file {
-            Some(vlog_file) => {
-                self.delta_ok = true;
-                self.vlog_file = Some(vlog_file);
-            }
-            None if ok => self.delta_ok = true,
-            None => self.delta_ok = false,
-        }
-        Ok(self)
+    /// Enable delta persistence, and configure value-log-file.
+    pub fn set_delta(&mut self, ok: bool) -> &mut Self {
+        self.delta_ok = true;
+        self
     }
 
     /// Persist values in a separate file, called value-log file. To persist
     /// values along with leaf node, pass `ok` as false.
-    pub fn set_value_log(
-        &mut self,
-        ok: bool,
-        file: Option<ffi::OsString>,
-    ) -> Result<&mut Self> {
-        match file {
-            Some(vlog_file) => {
-                self.value_in_vlog = true;
-                self.vlog_file = Some(vlog_file);
-            }
-            None if ok => self.value_in_vlog = true,
-            None => self.value_in_vlog = false,
-        }
-        Ok(self)
+    pub fn set_value_log(&mut self, ok: bool) -> &mut Self {
+        self.value_in_vlog = true;
+        self
     }
 
     /// Set flush queue size, increasing the queue size will improve batch
     /// flushing.
-    pub fn set_flush_queue_size(&mut self, size: usize) -> Result<&mut Self> {
+    pub fn set_flush_queue_size(&mut self, size: usize) -> &mut Self {
         self.flush_queue_size = size;
-        Ok(self)
-    }
-}
-
-impl Config {
-    fn to_index_file(&self) -> ffi::OsString {
-        let file_path: path::PathBuf = [
-            self.dir.to_os_string(),
-            IndexFileName::from(self.name.clone()).into(),
-        ]
-        .iter()
-        .collect();
-        file_path.into_os_string()
-    }
-
-    fn to_vlog_file(&self) -> ffi::OsString {
-        let file_path: path::PathBuf = [
-            self.dir.to_os_string(),
-            VlogFileName::from(self.name.clone()).into(),
-        ]
-        .iter()
-        .collect();
-        file_path.into_os_string()
+        self
     }
 }
 
@@ -210,6 +161,21 @@ impl Stats {
     const ID: u32 = 0x0;
 }
 
+impl From<Stats> for Config {
+    fn from(val: Stats) -> Config {
+        Config {
+            dir: ffi::OsString::default(),
+            name: val.name,
+            z_blocksize: val.z_blocksize,
+            m_blocksize: val.m_blocksize,
+            v_blocksize: val.v_blocksize,
+            delta_ok: val.delta_ok,
+            value_in_vlog: val.value_in_vlog,
+            flush_queue_size: FLUSH_QUEUE_SIZE,
+        }
+    }
+}
+
 pub struct Builder<K, V, B = NoBitmap> {
     // configuration
     config: Config,
@@ -233,8 +199,13 @@ impl<K, V, B> Builder<K, V, B> {
         B: Bloom,
     {
         let queue_size = config.flush_queue_size;
-        let iflush = Flusher::new(&config.to_index_file(), true, queue_size)?;
-        let vflush = Flusher::new(&config.to_vlog_file(), true, queue_size)?;
+        let iflush =
+            Flusher::new(&to_index_file(&config.dir, &config.name), true, queue_size)?;
+        let vflush = if config.value_in_vlog || config.delta_ok {
+            Flusher::new(&to_vlog_file(&config.dir, &config.name), true, queue_size)?
+        } else {
+            Flusher::empty()
+        };
 
         let val = Builder {
             config,
@@ -254,13 +225,22 @@ impl<K, V, B> Builder<K, V, B> {
         Ok(val)
     }
 
-    pub fn incremental(config: Config, app_meta: Vec<u8>) -> Result<Builder<K, V, B>>
+    pub fn incremental(
+        config: Config,
+        vlog_file: ffi::OsString,
+        app_meta: Vec<u8>,
+    ) -> Result<Builder<K, V, B>>
     where
         B: Bloom,
     {
         let queue_size = config.flush_queue_size;
-        let iflush = Flusher::new(&config.to_index_file(), true, queue_size)?;
-        let vflush = Flusher::new(&config.to_vlog_file(), false, queue_size)?;
+        let iflush =
+            Flusher::new(&to_index_file(&config.dir, &config.name), true, queue_size)?;
+        let vflush = if config.value_in_vlog || config.delta_ok {
+            Flusher::new(&to_vlog_file(&config.dir, &config.name), false, queue_size)?
+        } else {
+            Flusher::empty()
+        };
 
         let val = Builder {
             config,
@@ -455,7 +435,7 @@ impl<K, V, B> Index<K, V, B> {
             }
         }
 
-        let vlog = match stats.value_in_vlog {
+        let vlog = match stats.value_in_vlog || stats.delta_ok {
             true => {
                 let vlog_file = stats.vlog_file.as_ref();
                 let file_name = match vlog_file.map(|f| path::Path::new(f).file_name()) {
@@ -496,7 +476,7 @@ impl<K, V, B> Index<K, V, B> {
             None => err_at!(Invalid, msg: "bad file {:?}/{}", &self.dir, &self.name)?,
         };
 
-        let vlog = match self.stats.value_in_vlog {
+        let vlog = match self.stats.value_in_vlog || self.stats.delta_ok {
             true => {
                 let vlog_file = self.stats.vlog_file.as_ref();
                 let fnm = match vlog_file.map(|f| path::Path::new(f).file_name()) {
@@ -531,6 +511,29 @@ impl<K, V, B> Index<K, V, B> {
         Ok(val)
     }
 
+    fn compact(self, dir: &ffi::OsStr, name: &str, cutoff: mkit::Cutoff) -> Result<Self>
+    where
+        K: Hash,
+        V: mkit::Diff,
+        B: Bloom,
+    {
+        let config = {
+            let mut config: Config = self.stats.clone().into();
+            config.dir = dir.to_os_string();
+            config.name = name.to_string();
+            config
+        };
+
+        let builder = {
+            let app_meta = self.to_app_meta();
+            Builder::<K, V, B>::initial(config, app_meta)?
+        };
+        let iter = CompactScan::new(self.iter_with_versions()?, cutoff);
+        builder.build_from_iter(iter)?;
+
+        Index::open(dir, name)
+    }
+
     fn find_index_file(dir: &ffi::OsStr, name: &str) -> Option<ffi::OsString> {
         let iter = fs::read_dir(dir).ok()?;
         let entry = iter
@@ -548,18 +551,82 @@ impl<K, V, B> Index<K, V, B> {
 }
 
 impl<K, V, B> Index<K, V, B> {
-    fn to_app_meta(&self) -> Vec<u8> {
+    pub fn to_app_meta(&self) -> Vec<u8> {
         match &self.metas[0] {
             MetaItem::AppMetadata(data) => data.clone(),
             _ => unreachable!(),
         }
     }
 
-    fn to_seqno(&self) -> u64 {
+    pub fn to_seqno(&self) -> u64 {
         self.stats.seqno
+    }
+
+    pub fn to_stats(&self) -> Stats {
+        self.stats.clone()
+    }
+
+    pub fn is_compacted(&self) -> bool {
+        if self.stats.n_abytes == 0 {
+            true
+        } else if self.stats.delta_ok {
+            true
+        } else {
+            false
+        }
+    }
+
+    pub fn iter(&self) -> Result<Iter<K, V>>
+    where
+        V: mkit::Diff,
+    {
+        todo!()
+    }
+
+    pub fn iter_with_versions(&self) -> Result<Iter<K, V>>
+    where
+        V: mkit::Diff,
+    {
+        todo!()
     }
 }
 
-fn validatei<K, V, B>(index: &Index<K, V, B>) -> Result<()> {
+pub struct Iter<K, V> {
+    _key: marker::PhantomData<K>,
+    _val: marker::PhantomData<V>,
+}
+
+impl<K, V> Iterator for Iter<K, V>
+where
+    V: mkit::Diff,
+{
+    type Item = Result<crate::Item<K, V>>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        todo!()
+    }
+}
+
+fn validate<K, V, B>(index: &Index<K, V, B>) -> Result<()> {
     todo!()
+}
+
+fn to_index_file(dir: &ffi::OsStr, name: &str) -> ffi::OsString {
+    let file_path: path::PathBuf = [
+        dir.to_os_string(),
+        IndexFileName::from(name.to_string()).into(),
+    ]
+    .iter()
+    .collect();
+    file_path.into_os_string()
+}
+
+fn to_vlog_file(dir: &ffi::OsStr, name: &str) -> ffi::OsString {
+    let file_path: path::PathBuf = [
+        dir.to_os_string(),
+        VlogFileName::from(name.to_string()).into(),
+    ]
+    .iter()
+    .collect();
+    file_path.into_os_string()
 }

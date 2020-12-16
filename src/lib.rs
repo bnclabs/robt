@@ -1,4 +1,40 @@
-use std::{error, fmt, result};
+//! **Compaction**
+//!
+//! Compaction is the process of de-duplicating/removing entries
+//! and/or entry-versions from an index instance. In `robt` there
+//! are three types of compaction.
+//!
+//! _deduplication_
+//!
+//! When same value-log file is used to incrementally build newer
+//! batch of mutations older values gets duplicated. This requires
+//! a periodic clean up of garbage values to reduce disk foot-print.
+//!
+//! _mono-compaction_
+//!
+//! This is applicable for index instances that do not need distributed
+//! LSM. In such cases, the oldest-level's snapshot can compact away older
+//! versions of each entry and purge entries that are marked deleted.
+//!
+//! _lsm-compaction_
+//!
+//! Robt, unlike other lsm-based-storage, can have the entire index
+//! as LSM for distributed database designs. To be more precise, in lsm
+//! mode, even the root level that holds the entire dataset can retain
+//! older versions. With this feature it is possible to design secondary
+//! indexes, network distribution and other features like `backup` and
+//! `archival` ensuring consistency. This also means the index footprint
+//! will indefinitely accumulate older versions. With limited disk space,
+//! it is upto the application logic to issue `lsm-compaction` when
+//! it is safe to purge entries/versions that are older than certain seqno.
+//!
+//! _tombstone-compaction_
+//!
+//! Tombstone compaction is similar to `lsm-compaction` with one main
+//! difference. When application logic issue `tombstone-compaction` only
+//! deleted entries that are older than specified seqno will be purged.
+
+use std::{error, fmt, ops::Bound, result};
 
 macro_rules! read_file {
     ($fd:expr, $seek:expr, $n:expr, $msg:expr) => {{
@@ -149,5 +185,103 @@ impl From<mkit::Error> for Error {
             mkit::Error::IPCFail(p, m) => Error::IPCFail(p, m),
             mkit::Error::ThreadFail(p, m) => Error::ThreadFail(p, m),
         }
+    }
+}
+
+pub struct Item<K, V>
+where
+    V: mkit::Diff,
+{
+    key: K,
+    value: Value<V>,
+    deltas: Vec<Delta<<V as mkit::Diff>::D>>,
+}
+
+pub enum Value<V> {
+    U { value: vlog::Value<V>, seqno: u64 },
+    D { seqno: u64 },
+}
+
+pub enum Delta<D> {
+    U { delta: vlog::Delta<D>, seqno: u64 },
+    D { seqno: u64 },
+}
+
+impl<D> Delta<D> {
+    fn to_seqno(&self) -> u64 {
+        match self {
+            Delta::U { seqno, .. } => *seqno,
+            Delta::D { seqno } => *seqno,
+        }
+    }
+}
+
+impl<K, V> mkit::Entry<K, V> for Item<K, V>
+where
+    V: mkit::Diff,
+{
+    fn as_key(&self) -> &K {
+        &self.key
+    }
+
+    fn is_deleted(&self) -> bool {
+        match &self.value {
+            Value::U { .. } => false,
+            Value::D { .. } => true,
+        }
+    }
+
+    fn to_seqno(&self) -> u64 {
+        match &self.value {
+            Value::U { seqno, .. } => *seqno,
+            Value::D { seqno } => *seqno,
+        }
+    }
+
+    fn purge(mut self, cutoff: mkit::Cutoff) -> Option<Self>
+    where
+        Self: Sized,
+    {
+        let n = self.to_seqno();
+
+        let cutoff = match cutoff {
+            mkit::Cutoff::Mono if self.is_deleted() => return None,
+            mkit::Cutoff::Mono => {
+                self.deltas = vec![];
+                return Some(self);
+            }
+            mkit::Cutoff::Lsm(cutoff) => cutoff,
+            mkit::Cutoff::Tombstone(cutoff) if self.is_deleted() => match cutoff {
+                Bound::Included(cutoff) if n <= cutoff => return None,
+                Bound::Excluded(cutoff) if n < cutoff => return None,
+                Bound::Unbounded => return None,
+                _ => return Some(self),
+            },
+            mkit::Cutoff::Tombstone(_) => return Some(self),
+        };
+
+        // If all versions of this entry are before cutoff, then purge entry
+        match cutoff {
+            Bound::Included(std::u64::MIN) => return Some(self),
+            Bound::Excluded(std::u64::MIN) => return Some(self),
+            Bound::Included(cutoff) if n <= cutoff => return None,
+            Bound::Excluded(cutoff) if n < cutoff => return None,
+            Bound::Unbounded => return None,
+            _ => (),
+        }
+        // Otherwise, purge only those versions that are before cutoff
+        self.deltas = self
+            .deltas
+            .drain(..)
+            .take_while(|d| {
+                let seqno = d.to_seqno();
+                match cutoff {
+                    Bound::Included(cutoff) if seqno > cutoff => true,
+                    Bound::Excluded(cutoff) if seqno >= cutoff => true,
+                    _ => false,
+                }
+            })
+            .collect();
+        Some(self)
     }
 }
