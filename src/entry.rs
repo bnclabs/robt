@@ -7,91 +7,68 @@ use std::io;
 
 use crate::{vlog, Result};
 
-const KEY_VER1: u32 = 0x0001;
 const ENTRY_VER1: u32 = 0x0001;
 
 #[derive(Clone, Cborize)]
-pub struct Key<K> {
-    key: K,
-}
-
-impl<K> Key<K> {
-    const ID: u32 = ENTRY_VER1;
-}
-
-impl<K> Key<K>
+pub enum Entry<K, V>
 where
-    K: IntoCbor + FromCbor,
-{
-    pub fn encode<W>(self, buf: &mut W) -> Result<usize>
-    where
-        W: io::Write,
-    {
-        Ok(self.into_cbor()?.encode(buf)?)
-    }
-    pub fn decode<R>(buf: &mut R) -> Result<(Self, usize)>
-    where
-        R: io::Read,
-    {
-        let (val, n) = Cbor::decode(buf)?;
-        Ok((Key::from_cbor(val)?, n))
-    }
-}
-
-#[derive(Clone, Cborize)]
-pub enum Entry<V>
-where
-    V: Diff + FromCbor + IntoCbor,
-    <V as Diff>::D: FromCbor + IntoCbor,
+    V: Diff,
+    <V as Diff>::D: IntoCbor + FromCbor,
 {
     MM {
+        key: K,
         fpos: u64,
     },
     MZ {
+        key: K,
         fpos: u64,
     },
     ZZ {
+        key: K,
         seqno: u64,
-        delete: bool,
+        deleted: bool,
         value: vlog::Value<V>,
-        deltas: Vec<vlog::Delta<V>>,
+        deltas: Vec<vlog::Delta<<V as Diff>::D>>,
     },
 }
 
-impl<V> Entry<V>
+impl<K, V> Entry<K, V>
 where
-    V: Diff + FromCbor + IntoCbor,
-    <V as Diff>::D: FromCbor + IntoCbor,
+    V: Diff,
+    <V as Diff>::D: IntoCbor + FromCbor,
 {
     const ID: u32 = ENTRY_VER1;
 
-    fn new_mm(fpos: u64) -> Self {
-        Entry::MM { fpos }
+    fn new_mm(key: K, fpos: u64) -> Self {
+        Entry::MM { key, fpos }
     }
 
-    fn new_mz(fpos: u64) -> Self {
-        Entry::MZ { fpos }
+    fn new_mz(key: K, fpos: u64) -> Self {
+        Entry::MZ { key, fpos }
     }
 
     fn new_zz(
+        key: K,
         seqno: u64,
-        delete: bool,
+        deleted: bool,
         value: vlog::Value<V>,
-        deltas: Vec<vlog::Delta<V>>,
+        deltas: Vec<vlog::Delta<<V as Diff>::D>>,
     ) -> Self {
         Entry::ZZ {
+            key,
             seqno,
-            delete,
+            deleted,
             value,
             deltas,
         }
     }
 }
 
-impl<V> Entry<V>
+impl<K, V> Entry<K, V>
 where
-    V: Diff + FromCbor + IntoCbor,
-    <V as Diff>::D: FromCbor + IntoCbor,
+    V: Diff + IntoCbor + FromCbor,
+    K: IntoCbor + FromCbor,
+    <V as Diff>::D: IntoCbor + FromCbor,
 {
     pub fn encode<W>(self, buf: &mut W) -> Result<usize>
     where
@@ -99,6 +76,7 @@ where
     {
         Ok(self.into_cbor()?.encode(buf)?)
     }
+
     pub fn decode<R>(buf: &mut R) -> Result<(Self, usize)>
     where
         R: io::Read,
@@ -129,8 +107,8 @@ where
 
     pub fn to_fpos(&self) -> Option<u64> {
         match self {
-            Entry::MZ { fpos } => Some(*fpos),
-            Entry::MM { fpos } => Some(*fpos),
+            Entry::MZ { fpos, .. } => Some(*fpos),
+            Entry::MM { fpos, .. } => Some(*fpos),
             Entry::ZZ { .. } => None,
         }
     }

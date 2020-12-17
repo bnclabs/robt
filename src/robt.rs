@@ -3,8 +3,9 @@ use log::debug;
 use mkit::{
     self,
     cbor::{Cbor, FromCbor},
-    traits::{Bloom, Footprint},
-    Cborize, Entry,
+    db,
+    traits::{Bloom, Diff, Footprint},
+    Cborize,
 };
 
 use std::{
@@ -36,6 +37,8 @@ pub const FLUSH_QUEUE_SIZE: usize = 64;
 
 /// Marker block size, not to be tampered with.
 const MARKER_BLOCK_SIZE: usize = 1024 * 4;
+
+const MAX_DEPTH: usize = 100;
 
 /// Configuration for Read Only BTree index.
 #[derive(Clone)]
@@ -263,18 +266,18 @@ impl<K, V, B> Builder<K, V, B> {
 }
 
 impl<K, V, B> Builder<K, V, B> {
-    pub fn build_from_iter<I, E>(mut self, iter: I) -> Result<Stats>
+    pub fn build_from_iter<I>(mut self, iter: I) -> Result<Stats>
     where
         K: Hash,
-        I: Iterator<Item = Result<E>>,
-        E: Entry<K, V>,
+        V: Diff,
+        I: Iterator<Item = Result<db::Entry<K, V>>>,
         B: Bloom,
     {
         let mut iter = {
             let seqno = 0_64;
-            BuildScan::new(BitmappedScan::<K, V, B, I, E>::new(iter), seqno)
+            BuildScan::new(BitmappedScan::<K, V, B, I>::new(iter), seqno)
         };
-        let root = self.build_tree(&mut iter)?;
+        let root = self.build_tree(&mut iter, 1)?;
         let (build_time, seqno, n_count, n_deleted, epoch, iter) = iter.unwrap()?;
         let (bitmap, _) = iter.unwrap()?;
         self.stats.n_count = n_count;
@@ -285,7 +288,7 @@ impl<K, V, B> Builder<K, V, B> {
 
         let stats = {
             self.stats.n_bitmap = bitmap.len()?;
-            self.stats.n_abytes = self.vflush.to_start_fpos().unwrap_or(0);
+            self.stats.n_abytes = self.vflush.to_fpos().unwrap_or(0);
             self.stats.clone()
         };
 
@@ -297,24 +300,38 @@ impl<K, V, B> Builder<K, V, B> {
         Ok(stats)
     }
 
-    fn build_tree<I, E>(&self, iter: &mut BuildScan<K, V, I, E>) -> Result<u64>
+    fn build_tree<I>(&self, iter: &mut BuildScan<K, V, I>, depth: usize) -> Result<u64>
     where
         K: Hash,
-        I: Iterator<Item = Result<E>>,
-        E: Entry<K, V>,
+        V: Diff,
+        I: Iterator<Item = Result<db::Entry<K, V>>>,
     {
-        // return root
-        todo!()
+        match depth {
+            depth if depth < MAX_DEPTH => self.build_tree(iter, depth + 1),
+            depth => todo!(),
+        }
     }
 
-    fn build_flush(self) -> Result<(u64, u64)>
+    //fn build_zz(&self, iter: &mut BuildScan<K, V, I, E>) {
+    //    let mut iblock = Vec::with_capacity(self.config.z_blocksize);
+    //    let mut vblock = Vec::with_capacity(self.config.z_blocksize);
+
+    //    for item in iter.next() {
+    //        let value = if self.config.value_in_vlog {
+    //            vlog::Value::new_reference(fpos, length);
+    //        } else {
+    //        }
+    //    }
+    //}
+
+    fn build_flush(mut self) -> Result<(u64, u64)>
     where
         B: Bloom,
     {
         let mut block = self.to_meta_blocks()?;
         block.extend_from_slice(&(u64::try_from(block.len()).unwrap().to_be_bytes()));
 
-        self.iflush.post(block)?;
+        self.iflush.flush(block)?;
 
         let len1 = self.iflush.close()?;
         let len2 = self.vflush.close()?;
@@ -632,7 +649,7 @@ impl<K, V> Iterator for Iter<K, V>
 where
     V: mkit::Diff,
 {
-    type Item = Result<crate::Item<K, V>>;
+    type Item = Result<db::Entry<K, V>>;
 
     fn next(&mut self) -> Option<Self::Item> {
         todo!()

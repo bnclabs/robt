@@ -1,6 +1,6 @@
 use mkit::{
-    self,
-    traits::{Bloom, Entry},
+    self, db,
+    traits::{Bloom, Diff},
 };
 
 use std::{cmp, convert::TryFrom, hash, marker, time};
@@ -11,12 +11,12 @@ use crate::{Error, Result};
 ///
 /// Computes a bitmap of all keys iterated over the index `I`. Bitmap type
 /// is parameterised as `B`.
-pub struct BitmappedScan<K, V, B, I, E>
+pub struct BitmappedScan<K, V, B, I>
 where
     K: hash::Hash,
+    V: Diff,
     B: Bloom,
-    I: Iterator<Item = Result<E>>,
-    E: Entry<K, V>,
+    I: Iterator<Item = Result<db::Entry<K, V>>>,
 {
     iter: I,
     bitmap: B,
@@ -24,14 +24,14 @@ where
     _val: marker::PhantomData<V>,
 }
 
-impl<K, V, B, I, E> BitmappedScan<K, V, B, I, E>
+impl<K, V, B, I> BitmappedScan<K, V, B, I>
 where
     K: hash::Hash,
+    V: Diff,
     B: Bloom,
-    I: Iterator<Item = Result<E>>,
-    E: Entry<K, V>,
+    I: Iterator<Item = Result<db::Entry<K, V>>>,
 {
-    pub fn new(iter: I) -> BitmappedScan<K, V, B, I, E> {
+    pub fn new(iter: I) -> BitmappedScan<K, V, B, I> {
         BitmappedScan {
             iter,
             bitmap: <B as Bloom>::create(),
@@ -45,20 +45,20 @@ where
     }
 }
 
-impl<K, V, B, I, E> Iterator for BitmappedScan<K, V, B, I, E>
+impl<K, V, B, I> Iterator for BitmappedScan<K, V, B, I>
 where
     K: hash::Hash,
+    V: Diff,
     B: Bloom,
-    I: Iterator<Item = Result<E>>,
-    E: Entry<K, V>,
+    I: Iterator<Item = Result<db::Entry<K, V>>>,
 {
-    type Item = Result<E>;
+    type Item = Result<db::Entry<K, V>>;
 
     #[inline]
-    fn next(&mut self) -> Option<Result<E>> {
+    fn next(&mut self) -> Option<Self::Item> {
         match self.iter.next()? {
             Ok(entry) => {
-                self.bitmap.add_key(entry.as_key());
+                self.bitmap.add_key(&entry.key);
                 Some(Ok(entry))
             }
             Err(err) => Some(Err(err)),
@@ -68,10 +68,10 @@ where
 
 /// Iterator wrapper, to wrap full-table scanners and count seqno,
 /// index-items, deleted items and epoch.
-pub struct BuildScan<K, V, I, E>
+pub struct BuildScan<K, V, I>
 where
-    I: Iterator<Item = Result<E>>,
-    E: Entry<K, V>,
+    V: Diff,
+    I: Iterator<Item = Result<db::Entry<K, V>>>,
 {
     iter: I,
 
@@ -84,12 +84,12 @@ where
     _val: marker::PhantomData<V>,
 }
 
-impl<K, V, I, E> BuildScan<K, V, I, E>
+impl<K, V, I> BuildScan<K, V, I>
 where
-    I: Iterator<Item = Result<E>>,
-    E: Entry<K, V>,
+    V: Diff,
+    I: Iterator<Item = Result<db::Entry<K, V>>>,
 {
-    pub fn new(iter: I, seqno: u64) -> BuildScan<K, V, I, E> {
+    pub fn new(iter: I, seqno: u64) -> BuildScan<K, V, I> {
         BuildScan {
             iter,
 
@@ -123,15 +123,15 @@ where
     }
 }
 
-impl<K, V, I, E> Iterator for BuildScan<K, V, I, E>
+impl<K, V, I> Iterator for BuildScan<K, V, I>
 where
-    I: Iterator<Item = Result<E>>,
-    E: Entry<K, V>,
+    V: Diff,
+    I: Iterator<Item = Result<db::Entry<K, V>>>,
 {
-    type Item = Result<E>;
+    type Item = Result<db::Entry<K, V>>;
 
     #[inline]
-    fn next(&mut self) -> Option<Result<E>> {
+    fn next(&mut self) -> Option<Self::Item> {
         match self.iter.next()? {
             Ok(entry) => {
                 self.seqno = cmp::max(self.seqno, entry.to_seqno());
@@ -148,24 +148,24 @@ where
 
 /// Iterator type, for continuous full table iteration filtering out
 /// older mutations.
-pub struct CompactScan<K, V, I, E>
+pub struct CompactScan<K, V, I>
 where
-    I: Iterator<Item = Result<E>>,
-    E: Entry<K, V>,
+    V: Diff,
+    I: Iterator<Item = Result<db::Entry<K, V>>>,
 {
     iter: I,
-    cutoff: mkit::Cutoff,
+    cutoff: db::Cutoff,
 
     _key: marker::PhantomData<K>,
     _val: marker::PhantomData<V>,
 }
 
-impl<K, V, I, E> CompactScan<K, V, I, E>
+impl<K, V, I> CompactScan<K, V, I>
 where
-    I: Iterator<Item = Result<E>>,
-    E: Entry<K, V>,
+    V: Diff,
+    I: Iterator<Item = Result<db::Entry<K, V>>>,
 {
-    pub fn new(iter: I, cutoff: mkit::Cutoff) -> CompactScan<K, V, I, E> {
+    pub fn new(iter: I, cutoff: db::Cutoff) -> CompactScan<K, V, I> {
         CompactScan {
             iter,
             cutoff,
@@ -179,12 +179,12 @@ where
     }
 }
 
-impl<K, V, I, E> Iterator for CompactScan<K, V, I, E>
+impl<K, V, I> Iterator for CompactScan<K, V, I>
 where
-    I: Iterator<Item = Result<E>>,
-    E: Entry<K, V>,
+    V: Diff,
+    I: Iterator<Item = Result<db::Entry<K, V>>>,
 {
-    type Item = Result<E>;
+    type Item = Result<db::Entry<K, V>>;
 
     #[inline]
     fn next(&mut self) -> Option<Self::Item> {

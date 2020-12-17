@@ -9,9 +9,9 @@ use crate::{Error, Result};
 pub enum Flusher {
     File {
         file_path: ffi::OsString,
-        start_fpos: u64,
-        th: Option<thread::Thread<Vec<u8>, (), Result<u64>>>,
-        tx: Option<thread::Tx<Vec<u8>, ()>>,
+        fpos: u64,
+        th: Option<thread::Thread<Vec<u8>, u64, Result<u64>>>,
+        tx: Option<thread::Tx<Vec<u8>, u64>>,
     },
     None,
 }
@@ -44,12 +44,12 @@ impl Flusher {
         let (th, tx) = thread::Thread::new_sync(
             "flusher",
             flush_queue_size,
-            move |rx: thread::Rx<Vec<u8>, ()>| move || thread_flush(ffpp, fd, rx, fpos),
+            move |rx: thread::Rx<Vec<u8>, u64>| move || thread_flush(ffpp, fd, rx, fpos),
         );
 
         let val = Flusher::File {
             file_path: file_path.to_os_string(),
-            start_fpos: fpos,
+            fpos,
             th: Some(th),
             tx: Some(tx),
         };
@@ -68,19 +68,20 @@ impl Flusher {
         }
     }
 
-    pub fn to_start_fpos(&self) -> Option<u64> {
+    pub fn to_fpos(&self) -> Option<u64> {
         match self {
-            Flusher::File { start_fpos, .. } => Some(*start_fpos),
+            Flusher::File { fpos, .. } => Some(*fpos),
             Flusher::None => None,
         }
     }
 
-    pub fn post(&self, data: Vec<u8>) -> Result<()> {
+    pub fn flush(&mut self, data: Vec<u8>) -> Result<()> {
         match self {
-            Flusher::File { tx, .. } => tx.as_ref().unwrap().post(data)?,
+            Flusher::File { fpos, tx, .. } => {
+                *fpos = tx.as_ref().unwrap().request(data)?
+            }
             Flusher::None => unreachable!(),
-        }
-
+        };
         Ok(())
     }
 
@@ -98,7 +99,7 @@ impl Flusher {
 fn thread_flush(
     file_path: ffi::OsString,
     mut fd: fs::File,
-    rx: thread::Rx<Vec<u8>, ()>,
+    rx: thread::Rx<Vec<u8>, u64>,
     mut fpos: u64,
 ) -> Result<u64> {
     info!(target: "robt", "starting flusher for {:?} @ fpos {}", file_path, fpos);
@@ -110,9 +111,14 @@ fn thread_flush(
         file_path
     )?;
 
-    for (data, _) in rx {
-        fpos += u64::try_from(data.len()).unwrap();
+    for (data, res_tx) in rx {
+        let n = write_file!(fd, &data, &file_path, "flushing file")?;
+        if n != data.len() {
+            err_at!(IOError, fd.unlock(), "fail read unlock {:?}", file_path)?;
+            err_at!(IOError, msg: "partial flush for {:?}, {} != {}", file_path, n, data.len())?;
+        }
 
+        fpos += u64::try_from(data.len()).unwrap();
         trace!(
             target: "robt",
             "flusher {:?} {} {}",
@@ -120,13 +126,7 @@ fn thread_flush(
             data.len(),
             fpos
         );
-
-        let n = write_file!(fd, &data, &file_path, "flushing file")?;
-
-        if n != data.len() {
-            err_at!(IOError, fd.unlock(), "fail read unlock {:?}", file_path)?;
-            err_at!(IOError, msg: "partial flush for {:?}, {} != {}", file_path, n, data.len())?;
-        }
+        res_tx.map(|tx| tx.send(fpos).ok());
     }
 
     err_at!(IOError, fd.sync_all(), "fail sync_all {:?}", file_path)?;
