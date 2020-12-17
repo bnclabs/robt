@@ -2,7 +2,7 @@ use fs2::FileExt;
 use log::debug;
 use mkit::{
     self,
-    cbor::{Cbor, FromCbor},
+    cbor::{Cbor, FromCbor, IntoCbor},
     db,
     traits::{Bloom, Diff, Footprint},
     Cborize,
@@ -270,6 +270,7 @@ impl<K, V, B> Builder<K, V, B> {
     where
         K: Hash,
         V: Diff,
+        <V as Diff>::D: FromCbor + IntoCbor,
         I: Iterator<Item = Result<db::Entry<K, V>>>,
         B: Bloom,
     {
@@ -304,6 +305,7 @@ impl<K, V, B> Builder<K, V, B> {
     where
         K: Hash,
         V: Diff,
+        <V as Diff>::D: FromCbor + IntoCbor,
         I: Iterator<Item = Result<db::Entry<K, V>>>,
     {
         match depth {
@@ -316,10 +318,9 @@ impl<K, V, B> Builder<K, V, B> {
     //    let mut iblock = Vec::with_capacity(self.config.z_blocksize);
     //    let mut vblock = Vec::with_capacity(self.config.z_blocksize);
 
-    //    for item in iter.next() {
+    //    for entry in iter.next() {
     //        let value = if self.config.value_in_vlog {
     //            vlog::Value::new_reference(fpos, length);
-    //        } else {
     //        }
     //    }
     //}
@@ -544,6 +545,7 @@ impl<K, V, B> Index<K, V, B> {
     where
         K: Hash,
         V: mkit::Diff,
+        <V as Diff>::D: FromCbor + IntoCbor,
         B: Bloom,
     {
         let config = {
@@ -648,6 +650,7 @@ pub struct Iter<K, V> {
 impl<K, V> Iterator for Iter<K, V>
 where
     V: mkit::Diff,
+    <V as Diff>::D: FromCbor + IntoCbor,
 {
     type Item = Result<db::Entry<K, V>>;
 

@@ -114,6 +114,14 @@ where
     }
 }
 
+struct Block<K, V>
+where
+    V: Diff,
+    <V as Diff>::D: IntoCbor + FromCbor,
+{
+    entries: Vec<Entry<K, V>>,
+}
+
 //#[cfg(test)]
 //#[path = "entry_test.rs"]
 //mod entry_test;

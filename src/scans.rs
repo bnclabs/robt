@@ -1,5 +1,7 @@
 use mkit::{
-    self, db,
+    self,
+    cbor::{FromCbor, IntoCbor},
+    db,
     traits::{Bloom, Diff},
 };
 
@@ -15,6 +17,7 @@ pub struct BitmappedScan<K, V, B, I>
 where
     K: hash::Hash,
     V: Diff,
+    <V as Diff>::D: FromCbor + IntoCbor,
     B: Bloom,
     I: Iterator<Item = Result<db::Entry<K, V>>>,
 {
@@ -28,6 +31,7 @@ impl<K, V, B, I> BitmappedScan<K, V, B, I>
 where
     K: hash::Hash,
     V: Diff,
+    <V as Diff>::D: FromCbor + IntoCbor,
     B: Bloom,
     I: Iterator<Item = Result<db::Entry<K, V>>>,
 {
@@ -49,6 +53,7 @@ impl<K, V, B, I> Iterator for BitmappedScan<K, V, B, I>
 where
     K: hash::Hash,
     V: Diff,
+    <V as Diff>::D: FromCbor + IntoCbor,
     B: Bloom,
     I: Iterator<Item = Result<db::Entry<K, V>>>,
 {
@@ -71,6 +76,7 @@ where
 pub struct BuildScan<K, V, I>
 where
     V: Diff,
+    <V as Diff>::D: FromCbor + IntoCbor,
     I: Iterator<Item = Result<db::Entry<K, V>>>,
 {
     iter: I,
@@ -87,6 +93,7 @@ where
 impl<K, V, I> BuildScan<K, V, I>
 where
     V: Diff,
+    <V as Diff>::D: FromCbor + IntoCbor,
     I: Iterator<Item = Result<db::Entry<K, V>>>,
 {
     pub fn new(iter: I, seqno: u64) -> BuildScan<K, V, I> {
@@ -126,6 +133,7 @@ where
 impl<K, V, I> Iterator for BuildScan<K, V, I>
 where
     V: Diff,
+    <V as Diff>::D: FromCbor + IntoCbor,
     I: Iterator<Item = Result<db::Entry<K, V>>>,
 {
     type Item = Result<db::Entry<K, V>>;
@@ -151,6 +159,7 @@ where
 pub struct CompactScan<K, V, I>
 where
     V: Diff,
+    <V as Diff>::D: FromCbor + IntoCbor,
     I: Iterator<Item = Result<db::Entry<K, V>>>,
 {
     iter: I,
@@ -163,6 +172,7 @@ where
 impl<K, V, I> CompactScan<K, V, I>
 where
     V: Diff,
+    <V as Diff>::D: FromCbor + IntoCbor,
     I: Iterator<Item = Result<db::Entry<K, V>>>,
 {
     pub fn new(iter: I, cutoff: db::Cutoff) -> CompactScan<K, V, I> {
@@ -182,6 +192,7 @@ where
 impl<K, V, I> Iterator for CompactScan<K, V, I>
 where
     V: Diff,
+    <V as Diff>::D: FromCbor + IntoCbor,
     I: Iterator<Item = Result<db::Entry<K, V>>>,
 {
     type Item = Result<db::Entry<K, V>>;
