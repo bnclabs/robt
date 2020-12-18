@@ -18,10 +18,12 @@ where
     MM {
         key: K,
         fpos: u64,
+        length: u64,
     },
     MZ {
         key: K,
         fpos: u64,
+        length: u64,
     },
     ZZ {
         key: K,
@@ -51,12 +53,12 @@ where
 {
     const ID: u32 = ENTRY_VER1;
 
-    fn new_mm(key: K, fpos: u64) -> Self {
-        Entry::MM { key, fpos }
+    fn new_mm(key: K, fpos: u64, length: u64) -> Self {
+        Entry::MM { key, fpos, length }
     }
 
-    fn new_mz(key: K, fpos: u64) -> Self {
-        Entry::MZ { key, fpos }
+    fn new_mz(key: K, fpos: u64, length: u64) -> Self {
+        Entry::MZ { key, fpos, length }
     }
 
     fn new_zz(
@@ -74,7 +76,7 @@ where
     V: Diff + FromCbor + IntoCbor,
     <V as Diff>::D: IntoCbor + FromCbor,
 {
-    fn encode_zz(
+    pub fn encode_zz(
         self,
         mut vfpos: u64,
         value_in_vlog: bool,

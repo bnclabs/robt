@@ -17,6 +17,7 @@ use std::{
 };
 
 use crate::{
+    entry::Entry,
     files::{IndexFileName, VlogFileName},
     flush::Flusher,
     marker::ROOT_MARKER,
@@ -308,23 +309,18 @@ impl<K, V, B> Builder<K, V, B> {
         <V as Diff>::D: FromCbor + IntoCbor,
         I: Iterator<Item = Result<db::Entry<K, V>>>,
     {
+        let zz = BuildZZ::new(
+            self.config.clone(),
+            self.vflush.to_fpos().unwrap_or(0),
+            iter,
+        );
+
         match depth {
-            depth if depth < MAX_DEPTH => self.build_tree(iter, depth + 1),
-            depth => todo!(),
+            depth if depth == MAX_DEPTH => todo!(),
+            depth if depth == (MAX_DEPTH - 1) => todo!(),
+            depth => self.build_tree(iter, depth + 1),
         }
     }
-
-    //fn build_zz(&self, iter: &mut BuildScan<K, V, I>) {
-    //    let mut iblock = Vec::with_capacity(self.config.z_blocksize);
-    //    let mut vblock = Vec::with_capacity(self.config.z_blocksize);
-
-    //    for entry in iter.next() {
-    //        let vbytes = util::to_cbor_bytes(entry.value)?;
-    //        let value = if self.config.value_in_vlog {
-    //            vlog::Value::new_reference(fpos, length);
-    //        }
-    //    }
-    //}
 
     fn build_flush(mut self) -> Result<(u64, u64)>
     where
@@ -370,6 +366,92 @@ impl<K, V, B> Builder<K, V, B> {
             n
         } else {
             ((n / MARKER_BLOCK_SIZE) + 1) * MARKER_BLOCK_SIZE
+        }
+    }
+}
+
+struct BuildZZ<'a, K, V, I>
+where
+    V: Diff,
+    <V as Diff>::D: FromCbor + IntoCbor,
+    I: Iterator<Item = Result<db::Entry<K, V>>>,
+{
+    config: Config,
+    zblock: Vec<u8>,
+    vblock: Vec<u8>,
+    vfpos: u64,
+    iter: &'a mut BuildScan<K, V, I>,
+}
+
+impl<'a, K, V, I> BuildZZ<'a, K, V, I>
+where
+    V: Diff,
+    <V as Diff>::D: FromCbor + IntoCbor,
+    I: Iterator<Item = Result<db::Entry<K, V>>>,
+{
+    fn new(config: Config, vfpos: u64, iter: &'a mut BuildScan<K, V, I>) -> Self {
+        let zblock = Vec::with_capacity(config.z_blocksize);
+        let vblock = Vec::with_capacity(config.v_blocksize);
+        BuildZZ {
+            config,
+            zblock,
+            vblock,
+            vfpos,
+            iter,
+        }
+    }
+}
+
+impl<'a, K, V, I> Iterator for BuildZZ<'a, K, V, I>
+where
+    K: Clone + FromCbor + IntoCbor,
+    V: Diff + FromCbor + IntoCbor,
+    <V as Diff>::D: FromCbor + IntoCbor,
+    I: Iterator<Item = Result<db::Entry<K, V>>>,
+{
+    type Item = Result<(K, Vec<u8>, Vec<u8>)>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        let z_blocksize = self.config.z_blocksize;
+        let value_in_vlog = self.config.value_in_vlog;
+
+        let mut key: Option<K> = None;
+        loop {
+            match self.iter.next() {
+                Some(Ok(entry)) => {
+                    key.get_or_insert(entry.key.clone());
+                    let e = Entry::<K, V>::from(entry);
+                    let (a, b) = match e.encode_zz(self.vfpos, value_in_vlog) {
+                        Ok((a, b)) => (a, b),
+                        Err(err) => break Some(Err(err)),
+                    };
+                    self.vfpos += b.len() as u64;
+
+                    if (self.zblock.len() + a.len()) > z_blocksize {
+                        self.zblock.resize(self.config.z_blocksize, 0);
+                        let zblock = self.zblock.clone();
+                        let vblock = self.vblock.clone();
+                        self.zblock.truncate(0);
+                        self.vblock.truncate(0);
+                        self.zblock.extend_from_slice(&a);
+                        self.vblock.extend_from_slice(&b);
+                        break Some(Ok((key.unwrap(), zblock, vblock)));
+                    }
+
+                    self.zblock.extend_from_slice(&a);
+                    self.vblock.extend_from_slice(&b);
+                }
+                Some(Err(err)) => break Some(Err(err)),
+                None if key.is_some() => {
+                    self.zblock.resize(self.config.z_blocksize, 0);
+                    let zblock = self.zblock.clone();
+                    let vblock = self.vblock.clone();
+                    self.zblock.truncate(0);
+                    self.vblock.truncate(0);
+                    break Some(Ok((key.unwrap(), zblock, vblock)));
+                }
+                None => break None,
+            }
         }
     }
 }
