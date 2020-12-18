@@ -314,11 +314,12 @@ impl<K, V, B> Builder<K, V, B> {
         }
     }
 
-    //fn build_zz(&self, iter: &mut BuildScan<K, V, I, E>) {
+    //fn build_zz(&self, iter: &mut BuildScan<K, V, I>) {
     //    let mut iblock = Vec::with_capacity(self.config.z_blocksize);
     //    let mut vblock = Vec::with_capacity(self.config.z_blocksize);
 
     //    for entry in iter.next() {
+    //        let vbytes = util::to_cbor_bytes(entry.value)?;
     //        let value = if self.config.value_in_vlog {
     //            vlog::Value::new_reference(fpos, length);
     //        }
@@ -344,7 +345,7 @@ impl<K, V, B> Builder<K, V, B> {
     where
         B: Bloom,
     {
-        let stats = util::encode_to_cbor(self.stats.clone())?;
+        let stats = util::to_cbor_bytes(self.stats.clone())?;
 
         debug!(
             target: "robt",
@@ -361,7 +362,7 @@ impl<K, V, B> Builder<K, V, B> {
             MetaItem::Marker(ROOT_MARKER.clone()),
         ];
 
-        util::encode_to_cbor(metas)
+        util::to_cbor_bytes(metas)
     }
 
     fn compute_root_block(n: usize) -> usize {

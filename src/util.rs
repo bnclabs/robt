@@ -1,8 +1,8 @@
-use mkit::cbor::IntoCbor;
+use mkit::cbor::{Cbor, FromCbor, IntoCbor};
 
 use crate::{Error, Result};
 
-pub fn encode_to_cbor<T>(val: T) -> Result<Vec<u8>>
+pub fn to_cbor_bytes<T>(val: T) -> Result<Vec<u8>>
 where
     T: IntoCbor,
 {
@@ -13,4 +13,12 @@ where
     } else {
         Ok(data)
     }
+}
+
+pub fn from_cbor_bytes<T>(mut data: &[u8]) -> Result<(T, usize)>
+where
+    T: FromCbor,
+{
+    let (val, n) = Cbor::decode(&mut data)?;
+    Ok((T::from_cbor(val)?, n))
 }

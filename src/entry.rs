@@ -1,11 +1,11 @@
 use mkit::{
-    cbor::{Cbor, FromCbor, IntoCbor},
-    Cborize, Diff,
+    cbor::{self, Cbor, FromCbor, IntoCbor},
+    db, Cborize, Diff,
 };
 
-use std::io;
+use std::convert::TryFrom;
 
-use crate::{vlog, Result};
+use crate::{util, vlog, Error, Result};
 
 const ENTRY_VER1: u32 = 0x0001;
 
@@ -25,11 +25,23 @@ where
     },
     ZZ {
         key: K,
-        seqno: u64,
-        deleted: bool,
         value: vlog::Value<V>,
         deltas: Vec<vlog::Delta<<V as Diff>::D>>,
     },
+}
+
+impl<K, V> From<db::Entry<K, V>> for Entry<K, V>
+where
+    V: Diff,
+    <V as Diff>::D: IntoCbor + FromCbor,
+{
+    fn from(e: db::Entry<K, V>) -> Self {
+        Entry::ZZ {
+            key: e.key,
+            value: e.value.into(),
+            deltas: e.deltas.into_iter().map(vlog::Delta::from).collect(),
+        }
+    }
 }
 
 impl<K, V> Entry<K, V>
@@ -49,17 +61,57 @@ where
 
     fn new_zz(
         key: K,
-        seqno: u64,
-        deleted: bool,
         value: vlog::Value<V>,
         deltas: Vec<vlog::Delta<<V as Diff>::D>>,
     ) -> Self {
-        Entry::ZZ {
-            key,
-            seqno,
-            deleted,
-            value,
-            deltas,
+        Entry::ZZ { key, value, deltas }
+    }
+}
+
+impl<K, V> Entry<K, V>
+where
+    K: FromCbor + IntoCbor,
+    V: Diff + FromCbor + IntoCbor,
+    <V as Diff>::D: IntoCbor + FromCbor,
+{
+    fn encode_zz(
+        self,
+        mut vfpos: u64,
+        value_in_vlog: bool,
+    ) -> Result<(Vec<u8>, Vec<u8>)> {
+        match self {
+            Entry::ZZ { key, value, deltas } => {
+                let (value, mut vblock) = if value_in_vlog {
+                    value.encode(vfpos)?
+                } else {
+                    (value, vec![])
+                };
+
+                Cbor::Major4(cbor::Info::Indefinite, vec![]).encode(&mut vblock)?;
+
+                vfpos += err_at!(FailConvert, u64::try_from(vblock.len()))?;
+
+                let mut deltas_ref = vec![];
+                for delta in deltas.into_iter() {
+                    let (delta, data) = delta.encode(vfpos)?;
+                    deltas_ref.push(delta);
+                    vblock.extend_from_slice(&data);
+                    vfpos += err_at!(FailConvert, u64::try_from(data.len()))?;
+                }
+
+                Cbor::try_from(cbor::SimpleValue::Break)?.encode(&mut vblock)?;
+
+                let entry = Entry::ZZ {
+                    key,
+                    value,
+                    deltas: deltas_ref,
+                };
+
+                let iblock = util::to_cbor_bytes(entry)?;
+
+                Ok((iblock, vblock))
+            }
+            _ => unreachable!(),
         }
     }
 }
@@ -70,21 +122,6 @@ where
     K: IntoCbor + FromCbor,
     <V as Diff>::D: IntoCbor + FromCbor,
 {
-    pub fn encode<W>(self, buf: &mut W) -> Result<usize>
-    where
-        W: io::Write,
-    {
-        Ok(self.into_cbor()?.encode(buf)?)
-    }
-
-    pub fn decode<R>(buf: &mut R) -> Result<(Self, usize)>
-    where
-        R: io::Read,
-    {
-        let (val, n) = Cbor::decode(buf)?;
-        Ok((Entry::from_cbor(val)?, n))
-    }
-
     pub fn is_mblock(&self) -> bool {
         match self {
             Entry::MM { .. } => true,
@@ -112,14 +149,6 @@ where
             Entry::ZZ { .. } => None,
         }
     }
-}
-
-struct Block<K, V>
-where
-    V: Diff,
-    <V as Diff>::D: IntoCbor + FromCbor,
-{
-    entries: Vec<Entry<K, V>>,
 }
 
 //#[cfg(test)]
