@@ -302,22 +302,55 @@ impl<K, V, B> Builder<K, V, B> {
         Ok(stats)
     }
 
-    fn build_tree<I>(&self, iter: &mut BuildScan<K, V, I>, depth: usize) -> Result<u64>
+    fn build_tree<I>(
+        &self,
+        iter: &mut BuildScan<K, V, I>,
+        depth: usize,
+    ) -> Result<(Entry<K, V>, Vec<u8>)>
     where
         K: Hash,
         V: Diff,
         <V as Diff>::D: FromCbor + IntoCbor,
         I: Iterator<Item = Result<db::Entry<K, V>>>,
     {
-        let zz = BuildZZ::new(
-            self.config.clone(),
-            self.vflush.to_fpos().unwrap_or(0),
-            iter,
-        );
+        let m_blocksize = self.config.m_blocksize;
+        let z_blocksize = self.config.z_blocksize;
+
+        let zz = {
+            let vfpos = self.vflush.to_fpos().unwrap_or(0);
+            BuildZZ::new(self.config.clone(), vfpos, iter)
+        };
 
         match depth {
-            depth if depth == MAX_DEPTH => todo!(),
-            depth if depth == (MAX_DEPTH - 1) => todo!(),
+            depth if depth == MAX_DEPTH => match zz.next() {
+                Some(Ok((key, zblock, vblock))) => {
+                    let mz = Entry::new_mz(key, self.iflush.to_fpos().unwrap());
+                    self.vflush.flush(vblock)?;
+                    self.iflush.flush(zblock)?;
+                    Ok((mz, vec![]))
+                }
+                Some(Err(err)) => err_at!(Fatal, Err(err), "can't build zblock")?,
+                None => (),
+            },
+            depth if depth == (MAX_DEPTH - 1) => {
+                let mut mblock = Vec::with_capacity(m_blocksize);
+
+                Cbor::Major4(cbor::Info::Indefinite, vec![]).encode(&mut mblock)?;
+
+                let mut key: Option<K> = None;
+                loop {
+                    let (mz, _) = self.build_tree(iter, depth + 1)?;
+                    key.get_or_insert_with(|| mz.to_key());
+
+                    let data = util::to_cbor_bytes(mz)?;
+
+                    if (mblock.len() + data.len()) > m_blocksize {
+                        let mm =
+                            Entry::new_mm(key.unwrap(), self.iflush.to_fpos().unwrap());
+                        self.iflush.flush(zblock)?;
+                    }
+                }
+            }
             depth => self.build_tree(iter, depth + 1),
         }
     }
@@ -419,7 +452,7 @@ where
         loop {
             match self.iter.next() {
                 Some(Ok(entry)) => {
-                    key.get_or_insert(entry.key.clone());
+                    key.get_or_insert_with(|| entry.key.clone());
                     let e = Entry::<K, V>::from(entry);
                     let (a, b) = match e.encode_zz(self.vfpos, value_in_vlog) {
                         Ok((a, b)) => (a, b),

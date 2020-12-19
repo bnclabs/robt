@@ -18,12 +18,10 @@ where
     MM {
         key: K,
         fpos: u64,
-        length: u64,
     },
     MZ {
         key: K,
         fpos: u64,
-        length: u64,
     },
     ZZ {
         key: K,
@@ -53,12 +51,12 @@ where
 {
     const ID: u32 = ENTRY_VER1;
 
-    fn new_mm(key: K, fpos: u64, length: u64) -> Self {
-        Entry::MM { key, fpos, length }
+    fn new_mm(key: K, fpos: u64) -> Self {
+        Entry::MM { key, fpos }
     }
 
-    fn new_mz(key: K, fpos: u64, length: u64) -> Self {
-        Entry::MZ { key, fpos, length }
+    fn new_mz(key: K, fpos: u64) -> Self {
+        Entry::MZ { key, fpos }
     }
 
     fn new_zz(
@@ -149,6 +147,14 @@ where
             Entry::MZ { fpos, .. } => Some(*fpos),
             Entry::MM { fpos, .. } => Some(*fpos),
             Entry::ZZ { .. } => None,
+        }
+    }
+
+    pub fn to_key(&self) -> K {
+        match self {
+            Entry::MZ { key, .. } => key.clone(),
+            Entry::MM { key, .. } => key.clone(),
+            Entry::ZZ { key, .. } => key.clone(),
         }
     }
 }
