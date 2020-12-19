@@ -51,20 +51,12 @@ where
 {
     const ID: u32 = ENTRY_VER1;
 
-    fn new_mm(key: K, fpos: u64) -> Self {
+    pub fn new_mm(key: K, fpos: u64) -> Self {
         Entry::MM { key, fpos }
     }
 
-    fn new_mz(key: K, fpos: u64) -> Self {
+    pub fn new_mz(key: K, fpos: u64) -> Self {
         Entry::MZ { key, fpos }
-    }
-
-    fn new_zz(
-        key: K,
-        value: vlog::Value<V>,
-        deltas: Vec<vlog::Delta<<V as Diff>::D>>,
-    ) -> Self {
-        Entry::ZZ { key, value, deltas }
     }
 }
 
@@ -150,7 +142,10 @@ where
         }
     }
 
-    pub fn to_key(&self) -> K {
+    pub fn to_key(&self) -> K
+    where
+        K: Clone,
+    {
         match self {
             Entry::MZ { key, .. } => key.clone(),
             Entry::MM { key, .. } => key.clone(),

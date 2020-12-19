@@ -13,7 +13,8 @@ use std::{
     ffi, fs,
     hash::Hash,
     io, marker, path,
-    sync::Arc,
+    rc::Rc,
+    sync::{Arc, Mutex},
 };
 
 use crate::{
@@ -39,7 +40,7 @@ pub const FLUSH_QUEUE_SIZE: usize = 64;
 /// Marker block size, not to be tampered with.
 const MARKER_BLOCK_SIZE: usize = 1024 * 4;
 
-const MAX_DEPTH: usize = 100;
+const MAX_DEPTH: usize = 32;
 
 /// Configuration for Read Only BTree index.
 #[derive(Clone)]
@@ -185,8 +186,8 @@ pub struct Builder<K, V, B = NoBitmap> {
     // configuration
     config: Config,
     // active values
-    iflush: Flusher,
-    vflush: Flusher,
+    iflush: Rc<Mutex<Flusher>>,
+    vflush: Rc<Mutex<Flusher>>,
     initial: bool,
     // final result to be persisted
     app_meta: Vec<u8>,
@@ -199,21 +200,24 @@ pub struct Builder<K, V, B = NoBitmap> {
 }
 
 impl<K, V, B> Builder<K, V, B> {
-    pub fn initial(config: Config, app_meta: Vec<u8>) -> Result<Builder<K, V, B>>
+    pub fn initial(c: Config, app_meta: Vec<u8>) -> Result<Builder<K, V, B>>
     where
         B: Bloom,
     {
-        let queue_size = config.flush_queue_size;
-        let iflush =
-            Flusher::new(&to_index_file(&config.dir, &config.name), true, queue_size)?;
-        let vflush = if config.value_in_vlog || config.delta_ok {
-            Flusher::new(&to_vlog_file(&config.dir, &config.name), true, queue_size)?
+        let queue_size = c.flush_queue_size;
+        let iflush = {
+            let file_path = to_index_file(&c.dir, &c.name);
+            Rc::new(Mutex::new(Flusher::new(&file_path, true, queue_size)?))
+        };
+        let vflush = if c.value_in_vlog || c.delta_ok {
+            let file_path = to_vlog_file(&c.dir, &c.name);
+            Rc::new(Mutex::new(Flusher::new(&file_path, true, queue_size)?))
         } else {
-            Flusher::empty()
+            Rc::new(Mutex::new(Flusher::empty()))
         };
 
         let val = Builder {
-            config,
+            config: c,
             iflush,
             vflush,
             initial: true,
@@ -231,24 +235,27 @@ impl<K, V, B> Builder<K, V, B> {
     }
 
     pub fn incremental(
-        config: Config,
+        c: Config,
         vlog_file: ffi::OsString,
         app_meta: Vec<u8>,
     ) -> Result<Builder<K, V, B>>
     where
         B: Bloom,
     {
-        let queue_size = config.flush_queue_size;
-        let iflush =
-            Flusher::new(&to_index_file(&config.dir, &config.name), true, queue_size)?;
-        let vflush = if config.value_in_vlog || config.delta_ok {
-            Flusher::new(&to_vlog_file(&config.dir, &config.name), false, queue_size)?
+        let queue_size = c.flush_queue_size;
+        let iflush = {
+            let file_path = to_index_file(&c.dir, &c.name);
+            Rc::new(Mutex::new(Flusher::new(&file_path, true, queue_size)?))
+        };
+        let vflush = if c.value_in_vlog || c.delta_ok {
+            let file_path = to_vlog_file(&c.dir, &c.name);
+            Rc::new(Mutex::new(Flusher::new(&file_path, true, queue_size)?))
         } else {
-            Flusher::empty()
+            Rc::new(Mutex::new(Flusher::empty()))
         };
 
         let val = Builder {
-            config,
+            config: c,
             iflush,
             vflush,
             initial: false,
@@ -290,7 +297,7 @@ impl<K, V, B> Builder<K, V, B> {
 
         let stats = {
             self.stats.n_bitmap = bitmap.len()?;
-            self.stats.n_abytes = self.vflush.to_fpos().unwrap_or(0);
+            self.stats.n_abytes = self.vflush.lock().unwrap().to_fpos().unwrap_or(0);
             self.stats.clone()
         };
 
@@ -302,57 +309,21 @@ impl<K, V, B> Builder<K, V, B> {
         Ok(stats)
     }
 
-    fn build_tree<I>(
-        &self,
-        iter: &mut BuildScan<K, V, I>,
-        depth: usize,
-    ) -> Result<(Entry<K, V>, Vec<u8>)>
+    fn build_tree<I>(&self, iter: &mut BuildScan<K, V, I>) -> Result<u64>
     where
         K: Hash,
         V: Diff,
         <V as Diff>::D: FromCbor + IntoCbor,
         I: Iterator<Item = Result<db::Entry<K, V>>>,
     {
-        let m_blocksize = self.config.m_blocksize;
-        let z_blocksize = self.config.z_blocksize;
+        let zz = BuildZZ::new(
+            self.config.clone(),
+            Rc::clone(&self.iflush),
+            Rc::clone(&self.vflush),
+            iter,
+        );
 
-        let zz = {
-            let vfpos = self.vflush.to_fpos().unwrap_or(0);
-            BuildZZ::new(self.config.clone(), vfpos, iter)
-        };
-
-        match depth {
-            depth if depth == MAX_DEPTH => match zz.next() {
-                Some(Ok((key, zblock, vblock))) => {
-                    let mz = Entry::new_mz(key, self.iflush.to_fpos().unwrap());
-                    self.vflush.flush(vblock)?;
-                    self.iflush.flush(zblock)?;
-                    Ok((mz, vec![]))
-                }
-                Some(Err(err)) => err_at!(Fatal, Err(err), "can't build zblock")?,
-                None => (),
-            },
-            depth if depth == (MAX_DEPTH - 1) => {
-                let mut mblock = Vec::with_capacity(m_blocksize);
-
-                Cbor::Major4(cbor::Info::Indefinite, vec![]).encode(&mut mblock)?;
-
-                let mut key: Option<K> = None;
-                loop {
-                    let (mz, _) = self.build_tree(iter, depth + 1)?;
-                    key.get_or_insert_with(|| mz.to_key());
-
-                    let data = util::to_cbor_bytes(mz)?;
-
-                    if (mblock.len() + data.len()) > m_blocksize {
-                        let mm =
-                            Entry::new_mm(key.unwrap(), self.iflush.to_fpos().unwrap());
-                        self.iflush.flush(zblock)?;
-                    }
-                }
-            }
-            depth => self.build_tree(iter, depth + 1),
-        }
+        let mz = BuildMZ::new(
     }
 
     fn build_flush(mut self) -> Result<(u64, u64)>
@@ -362,10 +333,18 @@ impl<K, V, B> Builder<K, V, B> {
         let mut block = self.to_meta_blocks()?;
         block.extend_from_slice(&(u64::try_from(block.len()).unwrap().to_be_bytes()));
 
-        self.iflush.flush(block)?;
+        self.iflush.lock().unwrap().flush(block)?;
 
-        let len1 = self.iflush.close()?;
-        let len2 = self.vflush.close()?;
+        let len1 = {
+            let iflush = Rc::try_unwrap(self.iflush).ok().unwrap();
+            let iflush = iflush.into_inner().unwrap();
+            iflush.close()?
+        };
+        let len2 = {
+            let vflush = Rc::try_unwrap(self.vflush).ok().unwrap();
+            let vflush = vflush.into_inner().unwrap();
+            vflush.close()?
+        };
 
         Ok((len1, len2))
     }
@@ -379,7 +358,7 @@ impl<K, V, B> Builder<K, V, B> {
         debug!(
             target: "robt",
             "{:?}, metablocks root:{} bitmap:{} meta:{}  stats:{}",
-            self.iflush.to_file_path(), self.root, self.bitmap.len()?,
+            self.iflush.lock().unwrap().to_file_path(), self.root, self.bitmap.len()?,
             self.app_meta.len(), stats.len(),
         );
 
@@ -403,85 +382,248 @@ impl<K, V, B> Builder<K, V, B> {
     }
 }
 
-struct BuildZZ<'a, K, V, I>
+struct BuildMM<K, V, I>
 where
     V: Diff,
     <V as Diff>::D: FromCbor + IntoCbor,
     I: Iterator<Item = Result<db::Entry<K, V>>>,
 {
     config: Config,
-    zblock: Vec<u8>,
-    vblock: Vec<u8>,
-    vfpos: u64,
-    iter: &'a mut BuildScan<K, V, I>,
+    iflush: Rc<Mutex<Flusher>>,
+    iter: BuildMZ<K, V, I>,
+    entry: Option<(K, u64)>,
 }
 
-impl<'a, K, V, I> BuildZZ<'a, K, V, I>
+impl<K, V, I> BuildMM<K, V, I>
 where
     V: Diff,
     <V as Diff>::D: FromCbor + IntoCbor,
     I: Iterator<Item = Result<db::Entry<K, V>>>,
 {
-    fn new(config: Config, vfpos: u64, iter: &'a mut BuildScan<K, V, I>) -> Self {
-        let zblock = Vec::with_capacity(config.z_blocksize);
-        let vblock = Vec::with_capacity(config.v_blocksize);
+    fn new(config: Config, iflush: Rc<Mutex<Flusher>>, iter: BuildMZ<K, V, I>) -> Self {
+        BuildMM {
+            config,
+            iflush,
+            iter,
+            entry: None,
+        }
+    }
+}
+
+impl<K, V, I> Iterator for BuildMM<K, V, I>
+where
+    K: Clone + FromCbor + IntoCbor,
+    V: Clone + Diff + FromCbor + IntoCbor,
+    <V as Diff>::D: FromCbor + IntoCbor,
+    I: Iterator<Item = Result<db::Entry<K, V>>>,
+{
+    type Item = Result<(K, u64)>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        let mut iflush = self.iflush.lock().unwrap();
+
+        let m_blocksize = self.config.m_blocksize;
+
+        let mut mblock = Vec::with_capacity(m_blocksize);
+
+        let fpos = iflush.to_fpos().unwrap_or(0);
+        let mut first_key: Option<K> = None;
+        loop {
+            let item = match self.entry.take() {
+                Some((key, fpos)) => Some(Ok((key, fpos))),
+                None => self.iter.next(),
+            };
+            match item {
+                Some(Ok((key, fpos))) => {
+                    first_key.get_or_insert_with(|| key.clone());
+                    let e = Entry::<K, V>::new_mm(key.clone(), fpos);
+                    let data = match util::to_cbor_bytes(e) {
+                        Ok(data) => data,
+                        Err(err) => break Some(Err(err)),
+                    };
+
+                    if (mblock.len() + data.len()) > m_blocksize {
+                        self.entry = Some((key, fpos));
+                        mblock.resize(m_blocksize, 0);
+                        iflush.flush(mblock);
+                        break Some(Ok((first_key.unwrap(), fpos)));
+                    }
+                    mblock.extend_from_slice(&data);
+                }
+                Some(Err(err)) => break Some(Err(err)),
+                None if first_key.is_some() => {
+                    mblock.resize(m_blocksize, 0);
+                    iflush.flush(mblock);
+                    break Some(Ok((first_key.unwrap(), fpos)));
+                }
+                None => break None,
+            }
+        }
+    }
+}
+
+struct BuildMZ<K, V, I>
+where
+    V: Diff,
+    <V as Diff>::D: FromCbor + IntoCbor,
+    I: Iterator<Item = Result<db::Entry<K, V>>>,
+{
+    config: Config,
+    iflush: Rc<Mutex<Flusher>>,
+    iter: BuildZZ<K, V, I>,
+    entry: Option<(K, u64)>,
+}
+
+impl<K, V, I> BuildMZ<K, V, I>
+where
+    V: Diff,
+    <V as Diff>::D: FromCbor + IntoCbor,
+    I: Iterator<Item = Result<db::Entry<K, V>>>,
+{
+    fn new(config: Config, iflush: Rc<Mutex<Flusher>>, iter: BuildZZ<K, V, I>) -> Self {
+        BuildMZ {
+            config,
+            iflush,
+            iter,
+            entry: None,
+        }
+    }
+}
+
+impl<K, V, I> Iterator for BuildMZ<K, V, I>
+where
+    K: Clone + FromCbor + IntoCbor,
+    V: Clone + Diff + FromCbor + IntoCbor,
+    <V as Diff>::D: FromCbor + IntoCbor,
+    I: Iterator<Item = Result<db::Entry<K, V>>>,
+{
+    type Item = Result<(K, u64)>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        let mut iflush = self.iflush.lock().unwrap();
+
+        let m_blocksize = self.config.m_blocksize;
+
+        let mut mblock = Vec::with_capacity(m_blocksize);
+
+        let fpos = iflush.to_fpos().unwrap_or(0);
+        let mut first_key: Option<K> = None;
+        loop {
+            let item = match self.entry.take() {
+                Some((key, fpos)) => Some(Ok((key, fpos))),
+                None => self.iter.next(),
+            };
+            match item {
+                Some(Ok((key, fpos))) => {
+                    first_key.get_or_insert_with(|| key.clone());
+                    let e = Entry::<K, V>::new_mz(key.clone(), fpos);
+                    let data = match util::to_cbor_bytes(e) {
+                        Ok(data) => data,
+                        Err(err) => break Some(Err(err)),
+                    };
+
+                    if (mblock.len() + data.len()) > m_blocksize {
+                        self.entry = Some((key, fpos));
+                        mblock.resize(m_blocksize, 0);
+                        iflush.flush(mblock);
+                        break Some(Ok((first_key.unwrap(), fpos)));
+                    }
+                    mblock.extend_from_slice(&data);
+                }
+                Some(Err(err)) => break Some(Err(err)),
+                None if first_key.is_some() => {
+                    mblock.resize(m_blocksize, 0);
+                    iflush.flush(mblock);
+                    break Some(Ok((first_key.unwrap(), fpos)));
+                }
+                None => break None,
+            }
+        }
+    }
+}
+
+struct BuildZZ<K, V, I>
+where
+    V: Diff,
+    <V as Diff>::D: FromCbor + IntoCbor,
+    I: Iterator<Item = Result<db::Entry<K, V>>>,
+{
+    config: Config,
+    iflush: Rc<Mutex<Flusher>>,
+    vflush: Rc<Mutex<Flusher>>,
+    iter: BuildScan<K, V, I>,
+}
+
+impl<K, V, I> BuildZZ<K, V, I>
+where
+    V: Diff,
+    <V as Diff>::D: FromCbor + IntoCbor,
+    I: Iterator<Item = Result<db::Entry<K, V>>>,
+{
+    fn new(
+        config: Config,
+        iflush: Rc<Mutex<Flusher>>,
+        vflush: Rc<Mutex<Flusher>>,
+        iter: BuildScan<K, V, I>,
+    ) -> Self {
         BuildZZ {
             config,
-            zblock,
-            vblock,
-            vfpos,
+            iflush,
+            vflush,
             iter,
         }
     }
 }
 
-impl<'a, K, V, I> Iterator for BuildZZ<'a, K, V, I>
+impl<K, V, I> Iterator for BuildZZ<K, V, I>
 where
     K: Clone + FromCbor + IntoCbor,
-    V: Diff + FromCbor + IntoCbor,
+    V: Clone + Diff + FromCbor + IntoCbor,
     <V as Diff>::D: FromCbor + IntoCbor,
     I: Iterator<Item = Result<db::Entry<K, V>>>,
 {
-    type Item = Result<(K, Vec<u8>, Vec<u8>)>;
+    type Item = Result<(K, u64)>;
 
     fn next(&mut self) -> Option<Self::Item> {
+        let mut iflush = self.iflush.lock().unwrap();
+        let mut vflush = self.vflush.lock().unwrap();
+
         let z_blocksize = self.config.z_blocksize;
+        let v_blocksize = self.config.v_blocksize;
         let value_in_vlog = self.config.value_in_vlog;
 
-        let mut key: Option<K> = None;
+        let mut zblock = Vec::with_capacity(z_blocksize);
+        let mut vblock = Vec::with_capacity(v_blocksize);
+
+        let fpos = iflush.to_fpos().unwrap_or(0);
+        let mut first_key: Option<K> = None;
         loop {
+            let vfpos = vflush.to_fpos().unwrap_or(0);
             match self.iter.next() {
                 Some(Ok(entry)) => {
-                    key.get_or_insert_with(|| entry.key.clone());
-                    let e = Entry::<K, V>::from(entry);
-                    let (a, b) = match e.encode_zz(self.vfpos, value_in_vlog) {
+                    first_key.get_or_insert_with(|| entry.key.clone());
+                    let e = Entry::<K, V>::from(entry.clone());
+                    let (a, b) = match e.encode_zz(vfpos, value_in_vlog) {
                         Ok((a, b)) => (a, b),
                         Err(err) => break Some(Err(err)),
                     };
-                    self.vfpos += b.len() as u64;
 
-                    if (self.zblock.len() + a.len()) > z_blocksize {
-                        self.zblock.resize(self.config.z_blocksize, 0);
-                        let zblock = self.zblock.clone();
-                        let vblock = self.vblock.clone();
-                        self.zblock.truncate(0);
-                        self.vblock.truncate(0);
-                        self.zblock.extend_from_slice(&a);
-                        self.vblock.extend_from_slice(&b);
-                        break Some(Ok((key.unwrap(), zblock, vblock)));
+                    if (zblock.len() + a.len()) > z_blocksize {
+                        self.iter.push(entry);
+                        zblock.resize(z_blocksize, 0);
+                        vflush.flush(vblock);
+                        iflush.flush(zblock);
+                        break Some(Ok((first_key.unwrap(), fpos)));
                     }
-
-                    self.zblock.extend_from_slice(&a);
-                    self.vblock.extend_from_slice(&b);
+                    zblock.extend_from_slice(&a);
+                    vblock.extend_from_slice(&b);
                 }
                 Some(Err(err)) => break Some(Err(err)),
-                None if key.is_some() => {
-                    self.zblock.resize(self.config.z_blocksize, 0);
-                    let zblock = self.zblock.clone();
-                    let vblock = self.vblock.clone();
-                    self.zblock.truncate(0);
-                    self.vblock.truncate(0);
-                    break Some(Ok((key.unwrap(), zblock, vblock)));
+                None if first_key.is_some() => {
+                    zblock.resize(z_blocksize, 0);
+                    vflush.flush(vblock);
+                    iflush.flush(zblock);
+                    break Some(Ok((first_key.unwrap(), fpos)));
                 }
                 None => break None,
             }
@@ -612,7 +754,7 @@ impl<K, V, B> Index<K, V, B> {
     }
 
     pub fn clone(&self) -> Result<Self> {
-        let mut index = match Self::find_index_file(&self.dir, &self.name) {
+        let index = match Self::find_index_file(&self.dir, &self.name) {
             Some(ip) => err_at!(IOError, fs::OpenOptions::new().read(true).open(&ip))?,
             None => err_at!(Invalid, msg: "bad file {:?}/{}", &self.dir, &self.name)?,
         };

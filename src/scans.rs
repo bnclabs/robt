@@ -80,6 +80,7 @@ where
     I: Iterator<Item = Result<db::Entry<K, V>>>,
 {
     iter: I,
+    entry: Option<db::Entry<K, V>>,
 
     start: time::SystemTime,
     seqno: u64,
@@ -99,6 +100,7 @@ where
     pub fn new(iter: I, seqno: u64) -> BuildScan<K, V, I> {
         BuildScan {
             iter,
+            entry: None,
 
             start: time::SystemTime::now(),
             seqno,
@@ -108,6 +110,10 @@ where
             _key: marker::PhantomData,
             _val: marker::PhantomData,
         }
+    }
+
+    pub fn push(&mut self, entry: db::Entry<K, V>) {
+        self.entry = Some(entry);
     }
 
     pub fn unwrap(self) -> Result<(u64, u64, u64, u64, u64, I)> {
@@ -140,16 +146,19 @@ where
 
     #[inline]
     fn next(&mut self) -> Option<Self::Item> {
-        match self.iter.next()? {
-            Ok(entry) => {
-                self.seqno = cmp::max(self.seqno, entry.to_seqno());
-                self.n_count += 1;
-                if entry.is_deleted() {
-                    self.n_deleted += 1;
+        match self.entry.take() {
+            Some(entry) => Some(Ok(entry)),
+            None => match self.iter.next()? {
+                Ok(entry) => {
+                    self.seqno = cmp::max(self.seqno, entry.to_seqno());
+                    self.n_count += 1;
+                    if entry.is_deleted() {
+                        self.n_deleted += 1;
+                    }
+                    Some(Ok(entry))
                 }
-                Some(Ok(entry))
-            }
-            Err(err) => Some(Err(err)),
+                Err(err) => Some(Err(err)),
+            },
         }
     }
 }
