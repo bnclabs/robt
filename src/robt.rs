@@ -4,16 +4,20 @@ use mkit::{
     self,
     cbor::{Cbor, FromCbor, IntoCbor},
     db,
-    traits::{Bloom, Diff, Footprint},
+    traits::{Bloom, Diff},
     Cborize,
 };
 
 use std::{
+    borrow::Borrow,
     cell::RefCell,
+    cmp,
     convert::{TryFrom, TryInto},
-    ffi, fs,
+    ffi, fmt, fs,
     hash::Hash,
-    io, marker, path,
+    io, marker,
+    ops::RangeBounds,
+    path,
     rc::Rc,
     sync::Arc,
 };
@@ -169,9 +173,9 @@ impl From<Stats> for Config {
 
 pub struct Builder<K, V, B = NoBitmap>
 where
-    K: Clone + Hash + FromCbor + IntoCbor,
-    V: Clone + Diff + FromCbor + IntoCbor,
-    <V as Diff>::D: FromCbor + IntoCbor,
+    K: Clone + Hash + IntoCbor,
+    V: Clone + Diff + IntoCbor,
+    <V as Diff>::D: IntoCbor,
     B: Bloom,
 {
     // configuration
@@ -191,9 +195,9 @@ where
 
 impl<K, V, B> Builder<K, V, B>
 where
-    K: Clone + Hash + FromCbor + IntoCbor,
-    V: Clone + Diff + FromCbor + IntoCbor,
-    <V as Diff>::D: FromCbor + IntoCbor,
+    K: Clone + Hash + IntoCbor,
+    V: Clone + Diff + IntoCbor,
+    <V as Diff>::D: IntoCbor,
     B: Bloom,
 {
     pub fn initial(c: Config, app_meta: Vec<u8>) -> Result<Builder<K, V, B>> {
@@ -262,9 +266,9 @@ where
 
 impl<K, V, B> Builder<K, V, B>
 where
-    K: Clone + Hash + FromCbor + IntoCbor,
-    V: Clone + Diff + FromCbor + IntoCbor,
-    <V as Diff>::D: FromCbor + IntoCbor,
+    K: Clone + Hash + IntoCbor,
+    V: Clone + Diff + IntoCbor,
+    <V as Diff>::D: IntoCbor,
     B: Bloom,
 {
     pub fn build_from_iter<I>(mut self, iter: I) -> Result<Stats>
@@ -289,7 +293,7 @@ where
 
         let stats = {
             self.stats.n_bitmap = bitmap.len()?;
-            self.stats.n_abytes = self.vflush.borrow().to_fpos().unwrap_or(0);
+            self.stats.n_abytes = self.vflush.as_ref().borrow().to_fpos().unwrap_or(0);
             self.stats.clone()
         };
 
@@ -355,7 +359,7 @@ where
         debug!(
             target: "robt",
             "{:?}, metablocks root:{} bitmap:{} meta:{}  stats:{}",
-            self.iflush.borrow().to_file_path(), self.root, self.bitmap.len()?,
+            self.iflush.as_ref().borrow().to_file_path(), self.root, self.bitmap.len()?,
             self.app_meta.len(), stats.len(),
         );
 
@@ -426,7 +430,7 @@ impl<K, V, B> Index<K, V, B> {
     where
         B: Bloom,
     {
-        let mut ifd = match Self::find_index_file(dir, name) {
+        let mut ifd = match find_index_file(dir, name) {
             Some(ip) => err_at!(IOError, fs::OpenOptions::new().read(true).open(&ip))?,
             None => err_at!(Invalid, msg: "bad file {:?}/{}", dir, name)?,
         };
@@ -480,7 +484,6 @@ impl<K, V, B> Index<K, V, B> {
         let val = Index {
             dir: dir.to_os_string(),
             name: name.to_string(),
-            footprint: usize::try_from(err_at!(IOError, ifd.metadata())?.len()).unwrap(),
 
             metas: Arc::new(metas),
             stats,
@@ -497,7 +500,7 @@ impl<K, V, B> Index<K, V, B> {
     }
 
     pub fn clone(&self) -> Result<Self> {
-        let index = match Self::find_index_file(&self.dir, &self.name) {
+        let index = match find_index_file(&self.dir, &self.name) {
             Some(ip) => err_at!(IOError, fs::OpenOptions::new().read(true).open(&ip))?,
             None => err_at!(Invalid, msg: "bad file {:?}/{}", &self.dir, &self.name)?,
         };
@@ -521,7 +524,6 @@ impl<K, V, B> Index<K, V, B> {
         let val = Index {
             dir: self.dir.clone(),
             name: self.name.clone(),
-            footprint: self.footprint,
 
             metas: Arc::clone(&self.metas),
             stats: self.stats.clone(),
@@ -537,7 +539,12 @@ impl<K, V, B> Index<K, V, B> {
         Ok(val)
     }
 
-    pub fn compact(self, dir: &ffi::OsStr, name: &str, cutoff: db::Cutoff) -> Result<Self>
+    pub fn compact(
+        mut self,
+        dir: &ffi::OsStr,
+        name: &str,
+        cutoff: db::Cutoff,
+    ) -> Result<Self>
     where
         K: Clone + Hash + FromCbor + IntoCbor,
         V: Clone + Diff + FromCbor + IntoCbor,
@@ -552,10 +559,10 @@ impl<K, V, B> Index<K, V, B> {
         };
 
         let builder = {
-            let app_meta = self.to_app_meta();
+            let app_meta = self.to_app_metadata();
             Builder::<K, V, B>::initial(config, app_meta)?
         };
-        let iter = CompactScan::new(self.iter_with_versions()?, cutoff);
+        let iter = CompactScan::new(self.iter::<<V as Diff>::D>()?, cutoff);
         builder.build_from_iter(iter)?;
 
         Index::open(dir, name)
@@ -577,19 +584,8 @@ impl<K, V, B> Index<K, V, B> {
         Ok(())
     }
 
-    fn find_index_file(dir: &ffi::OsStr, name: &str) -> Option<ffi::OsString> {
-        let iter = fs::read_dir(dir).ok()?;
-        let entry = iter
-            .filter_map(|entry| entry.ok())
-            .filter_map(|entry| {
-                match String::try_from(IndexFileName(entry.file_name())) {
-                    Ok(nm) if nm == name => Some(entry),
-                    _ => None,
-                }
-            })
-            .next();
-
-        entry.map(|entry| entry.file_name())
+    pub fn set_bitmap(&mut self, bitmap: B) {
+        self.bitmap = Arc::new(bitmap)
     }
 }
 
@@ -609,13 +605,16 @@ impl<K, V, B> Index<K, V, B> {
         self.stats.clone()
     }
 
-    pub fn to_bitmap(&self) -> B {
+    pub fn to_bitmap(&self) -> B
+    where
+        B: Clone,
+    {
         self.bitmap.as_ref().clone()
     }
 
     pub fn to_root(&self) -> u64 {
         match &self.metas[3] {
-            MetaItem::Root(root) => root,
+            MetaItem::Root(root) => *root,
             _ => unreachable!(),
         }
     }
@@ -632,40 +631,104 @@ impl<K, V, B> Index<K, V, B> {
         }
     }
 
-    pub fn iter(&self) -> Result<Iter<K, V>>
+    pub fn len(&self) -> usize {
+        usize::try_from(self.stats.n_count).unwrap()
+    }
+
+    pub fn get<Q, D>(&mut self, _key: &Q) -> Result<db::Entry<K, V, D>>
     where
-        V: mkit::Diff,
+        K: Borrow<Q>,
+        Q: Ord + ?Sized + Hash,
     {
         todo!()
     }
 
-    pub fn iter_with_versions(&self) -> Result<Iter<K, V>>
+    pub fn range<R, Q, D>(&mut self, _range: R) -> Result<Iter<K, V, D>>
     where
-        V: mkit::Diff,
+        K: Borrow<Q>,
+        R: RangeBounds<Q>,
+        Q: Ord + ?Sized,
     {
         todo!()
     }
-}
 
-pub struct Iter<K, V> {
-    _key: marker::PhantomData<K>,
-    _val: marker::PhantomData<V>,
-}
-
-impl<K, V> Iterator for Iter<K, V>
-where
-    V: mkit::Diff,
-    <V as Diff>::D: FromCbor + IntoCbor,
-{
-    type Item = Result<db::Entry<K, V, <V as Diff>::D>>;
-
-    fn next(&mut self) -> Option<Self::Item> {
+    pub fn reverse<R, Q, D>(&mut self, _range: R) -> Result<Iter<K, V, D>>
+    where
+        K: Borrow<Q>,
+        R: RangeBounds<Q>,
+        Q: Ord + ?Sized,
+    {
         todo!()
+    }
+
+    pub fn iter<D>(&mut self) -> Result<Iter<K, V, D>>
+    where
+        V: Diff,
+    {
+        todo!()
+    }
+
+    pub fn validate(&mut self) -> Result<Stats>
+    where
+        K: Clone + fmt::Debug + PartialOrd + FromCbor,
+        V: Diff + FromCbor,
+        <V as Diff>::D: FromCbor,
+    {
+        let iter = self.iter::<<V as Diff>::D>()?;
+
+        let mut prev_key: Option<K> = None;
+        let (mut n_count, mut n_deleted, mut seqno) = (0, 0, 0);
+
+        for entry in iter {
+            let entry = entry?;
+            n_count += 1;
+
+            if entry.is_deleted() {
+                n_deleted += 1;
+            }
+
+            seqno = cmp::max(seqno, entry.to_seqno());
+
+            match prev_key.as_ref().map(|pk| pk.lt(&entry.key)) {
+                Some(true) | None => (),
+                Some(false) => err_at!(Fatal, msg: "{:?} >= {:?}", prev_key, entry.key)?,
+            }
+
+            for d in entry.deltas.iter() {
+                if d.to_seqno() >= seqno {
+                    err_at!(Fatal, msg: "delta is newer {} {}", d.to_seqno(), seqno)?;
+                }
+            }
+
+            prev_key.get_or_insert_with(|| entry.key.clone());
+        }
+
+        let s = self.to_stats();
+        if n_count != s.n_count {
+            err_at!(Fatal, msg: "validate, n_count {} > {}", n_count, s.n_count)
+        } else if n_deleted != s.n_deleted {
+            err_at!(Fatal, msg: "validate, n_deleted {} > {}", n_deleted, s.n_deleted)
+        } else if seqno > 0 && seqno > s.seqno {
+            err_at!(Fatal, msg: "validate, seqno {} > {}", seqno, s.seqno)
+        } else {
+            Ok(s)
+        }
     }
 }
 
-fn validate<K, V, B>(_index: &Index<K, V, B>) -> Result<()> {
-    todo!()
+fn find_index_file(dir: &ffi::OsStr, name: &str) -> Option<ffi::OsString> {
+    let iter = fs::read_dir(dir).ok()?;
+    let entry = iter
+        .filter_map(|entry| entry.ok())
+        .filter_map(
+            |entry| match String::try_from(IndexFileName(entry.file_name())) {
+                Ok(nm) if nm == name => Some(entry),
+                _ => None,
+            },
+        )
+        .next();
+
+    entry.map(|entry| entry.file_name())
 }
 
 fn to_index_file(dir: &ffi::OsStr, name: &str) -> ffi::OsString {

@@ -1,5 +1,5 @@
 use mkit::{
-    cbor::{self, Cbor, FromCbor, IntoCbor},
+    cbor::{self, Cbor, IntoCbor},
     db, Cborize,
 };
 
@@ -50,9 +50,9 @@ impl<K, V, D> Entry<K, V, D> {
 
 impl<K, V, D> Entry<K, V, D>
 where
-    K: IntoCbor + FromCbor,
-    V: IntoCbor + FromCbor,
-    D: IntoCbor + FromCbor,
+    K: IntoCbor,
+    V: IntoCbor,
+    D: IntoCbor,
 {
     pub fn encode_zz(
         self,
@@ -122,6 +122,14 @@ impl<K, V, D> Entry<K, V, D> {
             Entry::MZ { fpos, .. } => Some(*fpos),
             Entry::MM { fpos, .. } => Some(*fpos),
             Entry::ZZ { .. } => None,
+        }
+    }
+
+    pub fn as_key(&self) -> &K {
+        match self {
+            Entry::MZ { key, .. } => key,
+            Entry::MM { key, .. } => key,
+            Entry::ZZ { key, .. } => key,
         }
     }
 

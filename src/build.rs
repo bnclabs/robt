@@ -1,17 +1,17 @@
 use mkit::{
+    cbor::{self, Cbor, IntoCbor},
     db,
-    {cbor::FromCbor, cbor::IntoCbor},
 };
 
-use std::{cell::RefCell, hash::Hash, rc::Rc};
+use std::{cell::RefCell, convert::TryFrom, hash::Hash, rc::Rc};
 
 use crate::{entry::Entry, flush::Flusher, robt::Config, scans::BuildScan, util, Result};
 
-macro_rules! try_value {
-    ($val:expr) => {{
-        match $val {
-            Ok(val) => val,
-            Err(err) => return Some(Err(err)),
+macro_rules! try_result {
+    ($res:expr) => {{
+        match $res {
+            Ok(res) => res,
+            Err(err) => return Some(Err(err.into())),
         }
     }};
 }
@@ -49,9 +49,9 @@ impl<K, V, D, I> BuildMM<K, V, D, I> {
 
 impl<K, V, D, I> Iterator for BuildMM<K, V, D, I>
 where
-    K: Clone + Hash + FromCbor + IntoCbor,
-    V: Clone + FromCbor + IntoCbor,
-    D: Clone + FromCbor + IntoCbor,
+    K: Clone + Hash + IntoCbor,
+    V: Clone + IntoCbor,
+    D: Clone + IntoCbor,
     I: Iterator<Item = Result<db::Entry<K, V, D>>>,
 {
     type Item = Result<(K, u64)>;
@@ -64,6 +64,9 @@ where
         let fpos = iflush.to_fpos().unwrap_or(0);
         let mut first_key: Option<K> = None;
         let mut n = 0;
+
+        try_result!(Cbor::Major4(cbor::Info::Indefinite, vec![]).encode(&mut mblock));
+
         loop {
             match next_item!(self) {
                 Some(Ok((key, fpos))) => {
@@ -71,7 +74,7 @@ where
 
                     first_key.get_or_insert_with(|| key.clone());
                     let e = Entry::<K, V, D>::new_mm(key.clone(), fpos);
-                    let data = try_value!(util::to_cbor_bytes(e));
+                    let data = try_result!(util::to_cbor_bytes(e));
                     if (mblock.len() + data.len()) > self.m_blocksize {
                         self.entry = Some((key, fpos));
                         break;
@@ -84,9 +87,13 @@ where
             }
         }
 
+        try_result!(
+            try_result!(Cbor::try_from(cbor::SimpleValue::Break)).encode(&mut mblock)
+        );
+
         if n > 1 {
             mblock.resize(self.m_blocksize, 0);
-            try_value!(iflush.flush(mblock));
+            try_result!(iflush.flush(mblock));
         }
         Some(Ok((first_key.unwrap(), fpos)))
     }
@@ -116,9 +123,9 @@ impl<K, V, D, I> BuildMZ<K, V, D, I> {
 
 impl<K, V, D, I> Iterator for BuildMZ<K, V, D, I>
 where
-    K: Clone + FromCbor + IntoCbor,
-    V: Clone + FromCbor + IntoCbor,
-    D: Clone + FromCbor + IntoCbor,
+    K: Clone + IntoCbor,
+    V: Clone + IntoCbor,
+    D: Clone + IntoCbor,
     I: Iterator<Item = Result<db::Entry<K, V, D>>>,
 {
     type Item = Result<(K, u64)>;
@@ -131,12 +138,10 @@ where
         let fpos = iflush.to_fpos().unwrap_or(0);
         let mut first_key: Option<K> = None;
 
+        try_result!(Cbor::Major4(cbor::Info::Indefinite, vec![]).encode(&mut mblock));
+
         loop {
-            let item = match self.entry.take() {
-                Some((key, fpos)) => Some(Ok((key, fpos))),
-                None => self.iter.next(),
-            };
-            match item {
+            match next_item!(self) {
                 Some(Ok((key, fpos))) => {
                     first_key.get_or_insert_with(|| key.clone());
                     let e = Entry::<K, V, D>::new_mz(key.clone(), fpos);
@@ -156,8 +161,12 @@ where
             }
         }
 
+        try_result!(
+            try_result!(Cbor::try_from(cbor::SimpleValue::Break)).encode(&mut mblock)
+        );
+
         mblock.resize(self.m_blocksize, 0);
-        try_value!(iflush.flush(mblock));
+        try_result!(iflush.flush(mblock));
         Some(Ok((first_key.unwrap(), fpos)))
     }
 }
@@ -191,9 +200,9 @@ impl<K, V, D, I> BuildZZ<K, V, D, I> {
 
 impl<K, V, D, I> Iterator for BuildZZ<K, V, D, I>
 where
-    K: Clone + FromCbor + IntoCbor,
-    V: Clone + FromCbor + IntoCbor,
-    D: Clone + FromCbor + IntoCbor,
+    K: Clone + IntoCbor,
+    V: Clone + IntoCbor,
+    D: Clone + IntoCbor,
     I: Iterator<Item = Result<db::Entry<K, V, D>>>,
 {
     type Item = Result<(K, u64)>;
@@ -207,6 +216,8 @@ where
 
         let fpos = iflush.to_fpos().unwrap_or(0);
         let mut first_key: Option<K> = None;
+
+        try_result!(Cbor::Major4(cbor::Info::Indefinite, vec![]).encode(&mut zblock));
 
         let mut iter = self.iter.borrow_mut();
         loop {
@@ -233,9 +244,13 @@ where
             }
         }
 
+        try_result!(
+            try_result!(Cbor::try_from(cbor::SimpleValue::Break)).encode(&mut zblock)
+        );
+
         zblock.resize(self.z_blocksize, 0);
-        try_value!(vflush.flush(vblock));
-        try_value!(iflush.flush(zblock));
+        try_result!(vflush.flush(vblock));
+        try_result!(iflush.flush(zblock));
         Some(Ok((first_key.unwrap(), fpos)))
     }
 }
@@ -259,9 +274,9 @@ impl<K, V, D, I> From<BuildMM<K, V, D, I>> for BuildIter<K, V, D, I> {
 
 impl<K, V, D, I> Iterator for BuildIter<K, V, D, I>
 where
-    K: Clone + Hash + FromCbor + IntoCbor,
-    V: Clone + FromCbor + IntoCbor,
-    D: Clone + FromCbor + IntoCbor,
+    K: Clone + Hash + IntoCbor,
+    V: Clone + IntoCbor,
+    D: Clone + IntoCbor,
     I: Iterator<Item = Result<db::Entry<K, V, D>>>,
 {
     type Item = Result<(K, u64)>;
