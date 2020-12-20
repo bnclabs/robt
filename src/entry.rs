@@ -3,7 +3,7 @@ use mkit::{
     db, Cborize,
 };
 
-use std::convert::TryFrom;
+use std::{borrow::Borrow, convert::TryFrom};
 
 use crate::{util, vlog, Error, Result};
 
@@ -32,6 +32,20 @@ impl<K, V, D> From<db::Entry<K, V, D>> for Entry<K, V, D> {
             key: e.key,
             value: e.value.into(),
             deltas: e.deltas.into_iter().map(vlog::Delta::from).collect(),
+        }
+    }
+}
+
+impl<K, V, D> From<Entry<K, V, D>> for db::Entry<K, V, D> {
+    fn from(e: Entry<K, V, D>) -> Self {
+        match e {
+            Entry::ZZ { key, value, deltas } => db::Entry {
+                key,
+                value: value.into(),
+                deltas: deltas.into_iter().map(db::Delta::from).collect(),
+            },
+            Entry::MZ { .. } => unreachable!(),
+            Entry::MM { .. } => unreachable!(),
         }
     }
 }
@@ -130,6 +144,17 @@ impl<K, V, D> Entry<K, V, D> {
             Entry::MZ { key, .. } => key,
             Entry::MM { key, .. } => key,
             Entry::ZZ { key, .. } => key,
+        }
+    }
+
+    pub fn borrow_key<Q>(&self) -> &Q
+    where
+        K: Borrow<Q>,
+    {
+        match self {
+            Entry::MZ { key, .. } => key.borrow(),
+            Entry::MM { key, .. } => key.borrow(),
+            Entry::ZZ { key, .. } => key.borrow(),
         }
     }
 

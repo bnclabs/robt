@@ -562,8 +562,9 @@ impl<K, V, B> Index<K, V, B> {
             let app_meta = self.to_app_metadata();
             Builder::<K, V, B>::initial(config, app_meta)?
         };
-        let iter = CompactScan::new(self.iter::<<V as Diff>::D>()?, cutoff);
-        builder.build_from_iter(iter)?;
+        //let iter = CompactScan::new(self.iter::<<V as Diff>::D>()?, cutoff);
+        //builder.build_from_iter(iter)?;
+        let x = 10;
 
         Index::open(dir, name)
     }
@@ -643,30 +644,30 @@ impl<K, V, B> Index<K, V, B> {
         todo!()
     }
 
-    pub fn range<R, Q, D>(&mut self, _range: R) -> Result<Iter<K, V, D>>
-    where
-        K: Borrow<Q>,
-        R: RangeBounds<Q>,
-        Q: Ord + ?Sized,
-    {
-        todo!()
-    }
+    //pub fn range<R, Q, D>(&mut self, _range: R) -> Result<Iter<K, V, D>>
+    //where
+    //    K: Borrow<Q>,
+    //    R: RangeBounds<Q>,
+    //    Q: Ord + ?Sized,
+    //{
+    //    todo!()
+    //}
 
-    pub fn reverse<R, Q, D>(&mut self, _range: R) -> Result<Iter<K, V, D>>
-    where
-        K: Borrow<Q>,
-        R: RangeBounds<Q>,
-        Q: Ord + ?Sized,
-    {
-        todo!()
-    }
+    //pub fn reverse<R, Q, D>(&mut self, _range: R) -> Result<Iter<K, V, D>>
+    //where
+    //    K: Borrow<Q>,
+    //    R: RangeBounds<Q>,
+    //    Q: Ord + ?Sized,
+    //{
+    //    todo!()
+    //}
 
-    pub fn iter<D>(&mut self) -> Result<Iter<K, V, D>>
-    where
-        V: Diff,
-    {
-        todo!()
-    }
+    //pub fn iter<D>(&mut self) -> Result<Iter<K, V, D>>
+    //where
+    //    V: Diff,
+    //{
+    //    todo!()
+    //}
 
     pub fn validate(&mut self) -> Result<Stats>
     where
@@ -674,45 +675,46 @@ impl<K, V, B> Index<K, V, B> {
         V: Diff + FromCbor,
         <V as Diff>::D: FromCbor,
     {
-        let iter = self.iter::<<V as Diff>::D>()?;
+        //let iter = self.iter::<<V as Diff>::D>()?;
 
-        let mut prev_key: Option<K> = None;
-        let (mut n_count, mut n_deleted, mut seqno) = (0, 0, 0);
+        //let mut prev_key: Option<K> = None;
+        //let (mut n_count, mut n_deleted, mut seqno) = (0, 0, 0);
 
-        for entry in iter {
-            let entry = entry?;
-            n_count += 1;
+        //for entry in iter {
+        //    let entry = entry?;
+        //    n_count += 1;
 
-            if entry.is_deleted() {
-                n_deleted += 1;
-            }
+        //    if entry.is_deleted() {
+        //        n_deleted += 1;
+        //    }
 
-            seqno = cmp::max(seqno, entry.to_seqno());
+        //    seqno = cmp::max(seqno, entry.to_seqno());
 
-            match prev_key.as_ref().map(|pk| pk.lt(&entry.key)) {
-                Some(true) | None => (),
-                Some(false) => err_at!(Fatal, msg: "{:?} >= {:?}", prev_key, entry.key)?,
-            }
+        //    match prev_key.as_ref().map(|pk| pk.lt(&entry.key)) {
+        //        Some(true) | None => (),
+        //        Some(false) => err_at!(Fatal, msg: "{:?} >= {:?}", prev_key, entry.key)?,
+        //    }
 
-            for d in entry.deltas.iter() {
-                if d.to_seqno() >= seqno {
-                    err_at!(Fatal, msg: "delta is newer {} {}", d.to_seqno(), seqno)?;
-                }
-            }
+        //    for d in entry.deltas.iter() {
+        //        if d.to_seqno() >= seqno {
+        //            err_at!(Fatal, msg: "delta is newer {} {}", d.to_seqno(), seqno)?;
+        //        }
+        //    }
 
-            prev_key.get_or_insert_with(|| entry.key.clone());
-        }
+        //    prev_key.get_or_insert_with(|| entry.key.clone());
+        //}
 
-        let s = self.to_stats();
-        if n_count != s.n_count {
-            err_at!(Fatal, msg: "validate, n_count {} > {}", n_count, s.n_count)
-        } else if n_deleted != s.n_deleted {
-            err_at!(Fatal, msg: "validate, n_deleted {} > {}", n_deleted, s.n_deleted)
-        } else if seqno > 0 && seqno > s.seqno {
-            err_at!(Fatal, msg: "validate, seqno {} > {}", seqno, s.seqno)
-        } else {
-            Ok(s)
-        }
+        //let s = self.to_stats();
+        //if n_count != s.n_count {
+        //    err_at!(Fatal, msg: "validate, n_count {} > {}", n_count, s.n_count)
+        //} else if n_deleted != s.n_deleted {
+        //    err_at!(Fatal, msg: "validate, n_deleted {} > {}", n_deleted, s.n_deleted)
+        //} else if seqno > 0 && seqno > s.seqno {
+        //    err_at!(Fatal, msg: "validate, seqno {} > {}", seqno, s.seqno)
+        //} else {
+        //    Ok(s)
+        //}
+        todo!()
     }
 }
 

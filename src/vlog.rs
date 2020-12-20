@@ -27,6 +27,15 @@ impl<V> From<db::Value<V>> for Value<V> {
     }
 }
 
+impl<V> From<Value<V>> for db::Value<V> {
+    fn from(value: Value<V>) -> db::Value<V> {
+        match value {
+            Value::N { value } => value,
+            Value::R { .. } => unreachable!(),
+        }
+    }
+}
+
 impl<V> Value<V> {
     pub fn encode(self, fpos: u64) -> Result<(Self, Vec<u8>)>
     where
@@ -71,6 +80,15 @@ impl<D> Delta<D> {
 impl<D> From<db::Delta<D>> for Delta<D> {
     fn from(delta: db::Delta<D>) -> Delta<D> {
         Delta::N { delta }
+    }
+}
+
+impl<D> From<Delta<D>> for db::Delta<D> {
+    fn from(delta: Delta<D>) -> db::Delta<D> {
+        match delta {
+            Delta::N { delta } => delta,
+            Delta::R { .. } => unreachable!(),
+        }
     }
 }
 

@@ -7,15 +7,6 @@ use std::{cell::RefCell, convert::TryFrom, hash::Hash, rc::Rc};
 
 use crate::{entry::Entry, flush::Flusher, robt::Config, scans::BuildScan, util, Result};
 
-macro_rules! try_result {
-    ($res:expr) => {{
-        match $res {
-            Ok(res) => res,
-            Err(err) => return Some(Err(err.into())),
-        }
-    }};
-}
-
 macro_rules! next_item {
     ($name:ident) => {
         match $name.entry.take() {

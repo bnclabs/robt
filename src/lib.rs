@@ -76,6 +76,15 @@ macro_rules! write_file {
     }};
 }
 
+macro_rules! try_result {
+    ($res:expr) => {{
+        match $res {
+            Ok(res) => res,
+            Err(err) => return Some(Err(err.into())),
+        }
+    }};
+}
+
 /// Short form to compose Error values.
 ///
 /// Here are few possible ways:
@@ -128,6 +137,7 @@ mod files;
 mod flush;
 mod marker;
 mod nobitmap;
+mod reader;
 mod robt;
 mod scans;
 mod util;
@@ -151,6 +161,7 @@ pub enum Error {
     IPCFail(String, String),
     ThreadFail(String, String),
     InvalidFile(String, String),
+    KeyNotFound(String, String),
 }
 
 impl fmt::Display for Error {
@@ -166,6 +177,7 @@ impl fmt::Display for Error {
             IPCFail(p, msg) => write!(f, "{} IPCFail: {}", p, msg),
             ThreadFail(p, msg) => write!(f, "{} ThreadFail: {}", p, msg),
             InvalidFile(p, msg) => write!(f, "{} InvalidFile: {}", p, msg),
+            KeyNotFound(p, msg) => write!(f, "{} KeyNotFound: {}", p, msg),
         }
     }
 }
