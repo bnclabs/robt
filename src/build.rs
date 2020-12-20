@@ -168,7 +168,7 @@ pub struct BuildZZ<K, V, D, I> {
     value_in_vlog: bool,
     iflush: Rc<RefCell<Flusher>>,
     vflush: Rc<RefCell<Flusher>>,
-    iter: BuildScan<K, V, D, I>,
+    iter: Rc<RefCell<BuildScan<K, V, D, I>>>,
 }
 
 impl<K, V, D, I> BuildZZ<K, V, D, I> {
@@ -176,7 +176,7 @@ impl<K, V, D, I> BuildZZ<K, V, D, I> {
         config: &Config,
         iflush: Rc<RefCell<Flusher>>,
         vflush: Rc<RefCell<Flusher>>,
-        iter: BuildScan<K, V, D, I>,
+        iter: Rc<RefCell<BuildScan<K, V, D, I>>>,
     ) -> Self {
         BuildZZ {
             z_blocksize: config.z_blocksize,
@@ -208,9 +208,10 @@ where
         let fpos = iflush.to_fpos().unwrap_or(0);
         let mut first_key: Option<K> = None;
 
+        let mut iter = self.iter.borrow_mut();
         loop {
             let vfpos = vflush.to_fpos().unwrap_or(0);
-            match self.iter.next() {
+            match iter.next() {
                 Some(Ok(entry)) => {
                     first_key.get_or_insert_with(|| entry.key.clone());
                     let e = Entry::<K, V, D>::from(entry.clone());
@@ -220,7 +221,7 @@ where
                     };
 
                     if (zblock.len() + a.len()) > self.z_blocksize {
-                        self.iter.push(entry);
+                        iter.push(entry);
                         break;
                     }
                     zblock.extend_from_slice(&a);

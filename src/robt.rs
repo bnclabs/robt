@@ -308,11 +308,12 @@ where
     where
         I: Iterator<Item = Result<db::Entry<K, V, <V as Diff>::D>>>,
     {
+        let iter = Rc::new(RefCell::new(iter));
         let zz = build::BuildZZ::new(
             &self.config,
             Rc::clone(&self.iflush),
             Rc::clone(&self.vflush),
-            iter,
+            Rc::clone(&iter),
         );
         let mz = build::BuildMZ::new(&self.config, Rc::clone(&self.iflush), zz);
         let mut build = (0..28).fold(build::BuildIter::from(mz), |build, _| {
@@ -324,7 +325,8 @@ where
             Some(Err(err)) => Err(err)?,
             None => err_at!(Invalid, msg: "empty iterator")?,
         };
-        todo!()
+
+        Ok((Rc::try_unwrap(iter).ok().unwrap().into_inner(), root))
     }
 
     fn build_flush(self) -> Result<(u64, u64)> {
@@ -407,7 +409,6 @@ impl MetaItem {
 pub struct Index<K, V, B> {
     dir: ffi::OsString,
     name: String,
-    footprint: usize,
 
     metas: Arc<Vec<MetaItem>>,
     stats: Stats,
@@ -418,12 +419,6 @@ pub struct Index<K, V, B> {
 
     _key: marker::PhantomData<K>,
     _val: marker::PhantomData<V>,
-}
-
-impl<K, V, B> Footprint for Index<K, V, B> {
-    fn footprint(&self) -> mkit::Result<usize> {
-        Ok(self.footprint)
-    }
 }
 
 impl<K, V, B> Index<K, V, B> {
@@ -603,9 +598,24 @@ impl<K, V, B> Index<K, V, B> {
         self.name.clone()
     }
 
-    pub fn to_app_meta(&self) -> Vec<u8> {
+    pub fn to_app_metadata(&self) -> Vec<u8> {
         match &self.metas[0] {
             MetaItem::AppMetadata(data) => data.clone(),
+            _ => unreachable!(),
+        }
+    }
+
+    pub fn to_stats(&self) -> Stats {
+        self.stats.clone()
+    }
+
+    pub fn to_bitmap(&self) -> B {
+        self.bitmap.as_ref().clone()
+    }
+
+    pub fn to_root(&self) -> u64 {
+        match &self.metas[3] {
+            MetaItem::Root(root) => root,
             _ => unreachable!(),
         }
     }
@@ -614,14 +624,8 @@ impl<K, V, B> Index<K, V, B> {
         self.stats.seqno
     }
 
-    pub fn to_stats(&self) -> Stats {
-        self.stats.clone()
-    }
-
     pub fn is_compacted(&self) -> bool {
         if self.stats.n_abytes == 0 {
-            true
-        } else if self.stats.delta_ok {
             true
         } else {
             false
