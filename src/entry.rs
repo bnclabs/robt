@@ -1,6 +1,6 @@
 use mkit::{
     cbor::{self, Cbor, FromCbor, IntoCbor},
-    db, Cborize, Diff,
+    db, Cborize,
 };
 
 use std::convert::TryFrom;
@@ -10,11 +10,7 @@ use crate::{util, vlog, Error, Result};
 const ENTRY_VER1: u32 = 0x0001;
 
 #[derive(Clone, Cborize)]
-pub enum Entry<K, V>
-where
-    V: Diff,
-    <V as Diff>::D: IntoCbor + FromCbor,
-{
+pub enum Entry<K, V, D> {
     MM {
         key: K,
         fpos: u64,
@@ -26,16 +22,12 @@ where
     ZZ {
         key: K,
         value: vlog::Value<V>,
-        deltas: Vec<vlog::Delta<<V as Diff>::D>>,
+        deltas: Vec<vlog::Delta<D>>,
     },
 }
 
-impl<K, V> From<db::Entry<K, V>> for Entry<K, V>
-where
-    V: Diff,
-    <V as Diff>::D: IntoCbor + FromCbor,
-{
-    fn from(e: db::Entry<K, V>) -> Self {
+impl<K, V, D> From<db::Entry<K, V, D>> for Entry<K, V, D> {
+    fn from(e: db::Entry<K, V, D>) -> Self {
         Entry::ZZ {
             key: e.key,
             value: e.value.into(),
@@ -44,11 +36,7 @@ where
     }
 }
 
-impl<K, V> Entry<K, V>
-where
-    V: Diff,
-    <V as Diff>::D: IntoCbor + FromCbor,
-{
+impl<K, V, D> Entry<K, V, D> {
     const ID: u32 = ENTRY_VER1;
 
     pub fn new_mm(key: K, fpos: u64) -> Self {
@@ -60,11 +48,11 @@ where
     }
 }
 
-impl<K, V> Entry<K, V>
+impl<K, V, D> Entry<K, V, D>
 where
-    K: FromCbor + IntoCbor,
-    V: Diff + FromCbor + IntoCbor,
-    <V as Diff>::D: IntoCbor + FromCbor,
+    K: IntoCbor + FromCbor,
+    V: IntoCbor + FromCbor,
+    D: IntoCbor + FromCbor,
 {
     pub fn encode_zz(
         self,
@@ -108,12 +96,7 @@ where
     }
 }
 
-impl<K, V> Entry<K, V>
-where
-    V: Diff + IntoCbor + FromCbor,
-    K: IntoCbor + FromCbor,
-    <V as Diff>::D: IntoCbor + FromCbor,
-{
+impl<K, V, D> Entry<K, V, D> {
     pub fn is_mblock(&self) -> bool {
         match self {
             Entry::MM { .. } => true,

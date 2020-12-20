@@ -27,11 +27,11 @@ impl<V> From<db::Value<V>> for Value<V> {
     }
 }
 
-impl<V> Value<V>
-where
-    V: FromCbor + IntoCbor,
-{
-    pub fn encode(self, fpos: u64) -> Result<(Self, Vec<u8>)> {
+impl<V> Value<V> {
+    pub fn encode(self, fpos: u64) -> Result<(Self, Vec<u8>)>
+    where
+        V: IntoCbor,
+    {
         match self {
             val @ Value::N { .. } => {
                 let data = util::to_cbor_bytes(val)?;
@@ -74,11 +74,11 @@ impl<D> From<db::Delta<D>> for Delta<D> {
     }
 }
 
-impl<D> Delta<D>
-where
-    D: IntoCbor,
-{
-    pub fn encode(self, fpos: u64) -> Result<(Self, Vec<u8>)> {
+impl<D> Delta<D> {
+    pub fn encode(self, fpos: u64) -> Result<(Self, Vec<u8>)>
+    where
+        D: IntoCbor,
+    {
         match self {
             val @ Delta::N { .. } => {
                 let data = util::to_cbor_bytes(val)?;

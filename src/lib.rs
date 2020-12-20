@@ -122,6 +122,7 @@ macro_rules! err_at {
     }};
 }
 
+mod build;
 mod entry;
 mod files;
 mod flush;
@@ -131,6 +132,8 @@ mod robt;
 mod scans;
 mod util;
 mod vlog;
+
+pub use robt::{Builder, Config, Index, Stats};
 
 /// Type alias for Result return type, used by this package.
 pub type Result<T> = result::Result<T, Error>;
