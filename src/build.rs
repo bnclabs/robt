@@ -5,7 +5,9 @@ use mkit::{
 
 use std::{cell::RefCell, convert::TryFrom, hash::Hash, rc::Rc};
 
-use crate::{entry::Entry, flush::Flusher, robt::Config, scans::BuildScan, util, Result};
+use crate::{
+    config::Config, entry::Entry, flush::Flusher, scans::BuildScan, util, Result,
+};
 
 macro_rules! next_item {
     ($name:ident) => {
@@ -49,6 +51,7 @@ where
 
     fn next(&mut self) -> Option<Self::Item> {
         let mut iflush = self.iflush.borrow_mut();
+        let m_blocksize = self.m_blocksize;
 
         let mut mblock = Vec::with_capacity(self.m_blocksize);
 
@@ -56,7 +59,7 @@ where
         let mut first_key: Option<K> = None;
         let mut n = 0;
 
-        try_result!(Cbor::Major4(cbor::Info::Indefinite, vec![]).encode(&mut mblock));
+        iter_result!(Cbor::Major4(cbor::Info::Indefinite, vec![]).encode(&mut mblock));
 
         loop {
             match next_item!(self) {
@@ -64,13 +67,15 @@ where
                     n += 1;
 
                     first_key.get_or_insert_with(|| key.clone());
-                    let e = Entry::<K, V, D>::new_mm(key.clone(), fpos);
-                    let data = try_result!(util::to_cbor_bytes(e));
-                    if (mblock.len() + data.len()) > self.m_blocksize {
+                    let ibytes = {
+                        let e = Entry::<K, V, D>::new_mm(key.clone(), fpos);
+                        iter_result!(util::into_cbor_bytes(e))
+                    };
+                    if (mblock.len() + ibytes.len()) > m_blocksize {
                         self.entry = Some((key, fpos));
                         break;
                     }
-                    mblock.extend_from_slice(&data);
+                    mblock.extend_from_slice(&ibytes);
                 }
                 Some(Err(err)) => return Some(Err(err)),
                 None if first_key.is_some() => break,
@@ -78,13 +83,12 @@ where
             }
         }
 
-        try_result!(
-            try_result!(Cbor::try_from(cbor::SimpleValue::Break)).encode(&mut mblock)
-        );
+        let brk = iter_result!(util::into_cbor_bytes(cbor::SimpleValue::Break));
+        mblock.extend_from_slice(&brk);
 
         if n > 1 {
             mblock.resize(self.m_blocksize, 0);
-            try_result!(iflush.flush(mblock));
+            iter_result!(iflush.flush(mblock));
         }
         Some(Ok((first_key.unwrap(), fpos)))
     }
@@ -123,28 +127,28 @@ where
 
     fn next(&mut self) -> Option<Self::Item> {
         let mut iflush = self.iflush.borrow_mut();
+        let m_blocksize = self.m_blocksize;
 
         let mut mblock = Vec::with_capacity(self.m_blocksize);
 
         let fpos = iflush.to_fpos().unwrap_or(0);
         let mut first_key: Option<K> = None;
 
-        try_result!(Cbor::Major4(cbor::Info::Indefinite, vec![]).encode(&mut mblock));
+        iter_result!(Cbor::Major4(cbor::Info::Indefinite, vec![]).encode(&mut mblock));
 
         loop {
             match next_item!(self) {
                 Some(Ok((key, fpos))) => {
                     first_key.get_or_insert_with(|| key.clone());
-                    let e = Entry::<K, V, D>::new_mz(key.clone(), fpos);
-                    let data = match util::to_cbor_bytes(e) {
-                        Ok(data) => data,
-                        Err(err) => return Some(Err(err)),
+                    let ibytes = {
+                        let e = Entry::<K, V, D>::new_mz(key.clone(), fpos);
+                        iter_result!(util::into_cbor_bytes(e))
                     };
-                    if (mblock.len() + data.len()) > self.m_blocksize {
+                    if (mblock.len() + ibytes.len()) > m_blocksize {
                         self.entry = Some((key, fpos));
                         break;
                     }
-                    mblock.extend_from_slice(&data);
+                    mblock.extend_from_slice(&ibytes);
                 }
                 Some(Err(err)) => return Some(Err(err)),
                 None if first_key.is_some() => break,
@@ -152,12 +156,11 @@ where
             }
         }
 
-        try_result!(
-            try_result!(Cbor::try_from(cbor::SimpleValue::Break)).encode(&mut mblock)
-        );
+        let brk = iter_result!(util::into_cbor_bytes(cbor::SimpleValue::Break));
+        mblock.extend_from_slice(&brk);
 
         mblock.resize(self.m_blocksize, 0);
-        try_result!(iflush.flush(mblock));
+        iter_result!(iflush.flush(mblock));
         Some(Ok((first_key.unwrap(), fpos)))
     }
 }
@@ -201,6 +204,8 @@ where
     fn next(&mut self) -> Option<Self::Item> {
         let mut iflush = self.iflush.borrow_mut();
         let mut vflush = self.vflush.borrow_mut();
+        let in_vlog = self.value_in_vlog;
+        let z_blocksize = self.z_blocksize;
 
         let mut zblock = Vec::with_capacity(self.z_blocksize);
         let mut vblock = Vec::with_capacity(self.v_blocksize);
@@ -208,26 +213,28 @@ where
         let fpos = iflush.to_fpos().unwrap_or(0);
         let mut first_key: Option<K> = None;
 
-        try_result!(Cbor::Major4(cbor::Info::Indefinite, vec![]).encode(&mut zblock));
+        iter_result!(Cbor::Major4(cbor::Info::Indefinite, vec![]).encode(&mut zblock));
 
         let mut iter = self.iter.borrow_mut();
+        let mut vfpos = vflush.to_fpos().unwrap_or(0);
+
         loop {
-            let vfpos = vflush.to_fpos().unwrap_or(0);
             match iter.next() {
                 Some(Ok(entry)) => {
                     first_key.get_or_insert_with(|| entry.key.clone());
-                    let e = Entry::<K, V, D>::from(entry.clone());
-                    let (a, b) = match e.encode_zz(vfpos, self.value_in_vlog) {
-                        Ok((a, b)) => (a, b),
-                        Err(err) => return Some(Err(err)),
+                    let (e, vbytes) = {
+                        let e = Entry::<K, V, D>::from(entry.clone());
+                        iter_result!(e.into_reference(vfpos, in_vlog))
                     };
+                    let ibytes = iter_result!(util::into_cbor_bytes(e));
 
-                    if (zblock.len() + a.len()) > self.z_blocksize {
+                    if (zblock.len() + ibytes.len()) > z_blocksize {
                         iter.push(entry);
                         break;
                     }
-                    zblock.extend_from_slice(&a);
-                    vblock.extend_from_slice(&b);
+                    zblock.extend_from_slice(&ibytes);
+                    vblock.extend_from_slice(&vbytes);
+                    vfpos += u64::try_from(vbytes.len()).unwrap();
                 }
                 Some(Err(err)) => return Some(Err(err)),
                 None if first_key.is_some() => break,
@@ -235,13 +242,12 @@ where
             }
         }
 
-        try_result!(
-            try_result!(Cbor::try_from(cbor::SimpleValue::Break)).encode(&mut zblock)
-        );
+        let brk = iter_result!(util::into_cbor_bytes(cbor::SimpleValue::Break));
+        zblock.extend_from_slice(&brk);
 
         zblock.resize(self.z_blocksize, 0);
-        try_result!(vflush.flush(vblock));
-        try_result!(iflush.flush(zblock));
+        iter_result!(vflush.flush(vblock));
+        iter_result!(iflush.flush(zblock));
         Some(Ok((first_key.unwrap(), fpos)))
     }
 }

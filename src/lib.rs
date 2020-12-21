@@ -64,19 +64,16 @@ macro_rules! write_file {
     ($fd:expr, $buffer:expr, $file:expr, $msg:expr) => {{
         use std::io::Write;
 
-        let n = err_at!(IOError, $fd.write($buffer))?;
-        if $buffer.len() == n {
-            Ok(n)
-        } else {
-            err_at!(
-                Fatal,
-                msg: "{}, {:?}, {}/{}", $msg, $file, $buffer.len(), n
-            )
+        match err_at!(IOError, $fd.write($buffer))? {
+            n if $buffer.len() == n => Ok(n),
+            n => err_at!(
+                Fatal, msg: "partial-wr {}, {:?}, {}/{}", $msg, $file, $buffer.len(), n
+            ),
         }
     }};
 }
 
-macro_rules! try_result {
+macro_rules! iter_result {
     ($res:expr) => {{
         match $res {
             Ok(res) => res,
@@ -132,18 +129,20 @@ macro_rules! err_at {
 }
 
 mod build;
+mod config;
 mod entry;
 mod files;
 mod flush;
 mod marker;
 mod nobitmap;
 mod reader;
-mod robt;
+//mod robt;
 mod scans;
 mod util;
 mod vlog;
 
-pub use robt::{Builder, Config, Index, Stats};
+pub use config::{Config, FLUSH_QUEUE_SIZE, MBLOCKSIZE, VBLOCKSIZE, ZBLOCKSIZE};
+// pub use robt::{Builder, Config, Index, Stats};
 
 /// Type alias for Result return type, used by this package.
 pub type Result<T> = result::Result<T, Error>;

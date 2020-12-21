@@ -37,13 +37,13 @@ impl<V> From<Value<V>> for db::Value<V> {
 }
 
 impl<V> Value<V> {
-    pub fn encode(self, fpos: u64) -> Result<(Self, Vec<u8>)>
+    pub fn into_reference(self, fpos: u64) -> Result<(Self, Vec<u8>)>
     where
         V: IntoCbor,
     {
         match self {
             val @ Value::N { .. } => {
-                let data = util::to_cbor_bytes(val)?;
+                let data = util::into_cbor_bytes(val)?;
                 let length = err_at!(FailConvert, u64::try_from(data.len()))?;
                 Ok((Value::R { fpos, length }, data))
             }
@@ -51,7 +51,7 @@ impl<V> Value<V> {
         }
     }
 
-    pub fn fetch(self, fd: &mut fs::File) -> Result<Self>
+    pub fn into_native(self, fd: &mut fs::File) -> Result<Self>
     where
         V: FromCbor,
     {
@@ -93,13 +93,13 @@ impl<D> From<Delta<D>> for db::Delta<D> {
 }
 
 impl<D> Delta<D> {
-    pub fn encode(self, fpos: u64) -> Result<(Self, Vec<u8>)>
+    pub fn into_reference(self, fpos: u64) -> Result<(Self, Vec<u8>)>
     where
         D: IntoCbor,
     {
         match self {
             val @ Delta::N { .. } => {
-                let data = util::to_cbor_bytes(val)?;
+                let data = util::into_cbor_bytes(val)?;
                 let length = err_at!(FailConvert, u64::try_from(data.len()))?;
                 Ok((Delta::R { fpos, length }, data))
             }
@@ -107,7 +107,7 @@ impl<D> Delta<D> {
         }
     }
 
-    pub fn fetch(self, fd: &mut fs::File) -> Result<Self>
+    pub fn into_native(self, fd: &mut fs::File) -> Result<Self>
     where
         D: FromCbor,
     {

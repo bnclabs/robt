@@ -24,152 +24,18 @@ use std::{
 
 use crate::{
     build,
+    entry::Entry,
     files::{IndexFileName, VlogFileName},
     flush::Flusher,
     marker::ROOT_MARKER,
     nobitmap::NoBitmap,
+    reader::Reader,
     scans::{BitmappedScan, BuildScan, CompactScan},
     util, Error, Result,
 };
 
-/// Default value for z-block-size, 4 * 1024 bytes.
-pub const ZBLOCKSIZE: usize = 4 * 1024; // 4KB leaf node
-/// Default value for m-block-size, 4 * 1024 bytes.
-pub const MBLOCKSIZE: usize = 4 * 1024; // 4KB intermediate node
-/// Default value for v-block-size, 4 * 1024 bytes.
-pub const VBLOCKSIZE: usize = 4 * 1024; // 4KB of blobs.
-/// Default value for Flush queue size, channel queue size, holding
-/// index blocks.
-pub const FLUSH_QUEUE_SIZE: usize = 64;
-
 /// Marker block size, not to be tampered with.
 const MARKER_BLOCK_SIZE: usize = 1024 * 4;
-
-/// Configuration for Read Only BTree index.
-#[derive(Clone)]
-pub struct Config {
-    /// location path where index files are created.
-    pub dir: ffi::OsString,
-    /// name of the index.
-    pub name: String,
-    /// Leaf block size in btree index.
-    /// Default: Config::ZBLOCKSIZE
-    pub z_blocksize: usize,
-    /// Intermediate block size in btree index.
-    /// Default: Config::MBLOCKSIZE
-    pub m_blocksize: usize,
-    /// If deltas are indexed and/or value to be stored in separate log
-    /// file.
-    /// Default: Config::VBLOCKSIZE
-    pub v_blocksize: usize,
-    /// Include delta as part of entry. Note that delta values are always
-    /// stored in separate value-log file.
-    /// Default: true
-    pub delta_ok: bool,
-    /// If true, then value shall be persisted in a separate file called
-    /// value log file. Otherwise value shall be saved in the index's
-    /// leaf node. Default: false
-    pub value_in_vlog: bool,
-    /// Flush queue size. Default: Config::FLUSH_QUEUE_SIZE
-    pub flush_queue_size: usize,
-}
-
-impl Config {
-    pub fn new(dir: &ffi::OsStr, name: &str) -> Config {
-        Config {
-            dir: dir.to_os_string(),
-            name: name.to_string(),
-            z_blocksize: ZBLOCKSIZE,
-            m_blocksize: MBLOCKSIZE,
-            v_blocksize: VBLOCKSIZE,
-            delta_ok: true,
-            value_in_vlog: false,
-            flush_queue_size: FLUSH_QUEUE_SIZE,
-        }
-    }
-
-    /// Configure differt set of block size for leaf-node, intermediate-node.
-    pub fn set_blocksize(&mut self, z: usize, v: usize, m: usize) -> &mut Self {
-        self.z_blocksize = z;
-        self.v_blocksize = v;
-        self.m_blocksize = m;
-        self
-    }
-
-    /// Enable delta persistence, and configure value-log-file.
-    pub fn set_delta(&mut self, delta_ok: bool) -> &mut Self {
-        self.delta_ok = delta_ok;
-        self
-    }
-
-    /// Persist values in a separate file, called value-log file. To persist
-    /// values along with leaf node, pass `ok` as false.
-    pub fn set_value_log(&mut self, value_log: bool) -> &mut Self {
-        self.value_in_vlog = value_log;
-        self
-    }
-
-    /// Set flush queue size, increasing the queue size will improve batch
-    /// flushing.
-    pub fn set_flush_queue_size(&mut self, size: usize) -> &mut Self {
-        self.flush_queue_size = size;
-        self
-    }
-}
-
-/// Statistic for Read Only BTree index.
-#[derive(Clone, Default, Cborize)]
-pub struct Stats {
-    /// Comes from [Config] type.
-    pub name: String,
-    /// Comes from [Config] type.
-    pub z_blocksize: usize,
-    /// Comes from [Config] type.
-    pub m_blocksize: usize,
-    /// Comes from [Config] type.
-    pub v_blocksize: usize,
-    /// Comes from [Config] type.
-    pub delta_ok: bool,
-    /// Comes from [Config] type.
-    pub vlog_file: Option<ffi::OsString>,
-    /// Comes from [Config] type.
-    pub value_in_vlog: bool,
-
-    /// Number of entries indexed.
-    pub n_count: u64,
-    /// Number of entries that are marked as deleted.
-    pub n_deleted: usize,
-    /// Sequence number for the latest entry.
-    pub seqno: u64,
-    /// Older size of value-log file, applicable only in compaction.
-    pub n_abytes: u64,
-    /// Number of entries in bitmap.
-    pub n_bitmap: usize,
-
-    /// Time take to build this btree.
-    pub build_time: u64,
-    /// Timestamp when this index was build, from UNIX EPOCH, in secs.
-    pub epoch: u64,
-}
-
-impl Stats {
-    const ID: u32 = 0x0;
-}
-
-impl From<Stats> for Config {
-    fn from(val: Stats) -> Config {
-        Config {
-            dir: ffi::OsString::default(),
-            name: val.name,
-            z_blocksize: val.z_blocksize,
-            m_blocksize: val.m_blocksize,
-            v_blocksize: val.v_blocksize,
-            delta_ok: val.delta_ok,
-            value_in_vlog: val.value_in_vlog,
-            flush_queue_size: FLUSH_QUEUE_SIZE,
-        }
-    }
-}
 
 pub struct Builder<K, V, B = NoBitmap>
 where
@@ -410,7 +276,7 @@ impl MetaItem {
 }
 
 /// Index type, immutable, durable, fully-packed and lockless reads.
-pub struct Index<K, V, B> {
+pub struct Index<K, V, B, D = db::NoDiff> {
     dir: ffi::OsString,
     name: String,
 
@@ -418,14 +284,13 @@ pub struct Index<K, V, B> {
     stats: Stats,
     bitmap: Arc<B>,
 
-    index: fs::File,
-    vlog: Option<fs::File>,
+    reader: Reader<K, V, D>,
 
     _key: marker::PhantomData<K>,
     _val: marker::PhantomData<V>,
 }
 
-impl<K, V, B> Index<K, V, B> {
+impl<K, V, B, D> Index<K, V, B, D> {
     pub fn open(dir: &ffi::OsStr, name: &str) -> Result<Index<K, V, B>>
     where
         B: Bloom,
@@ -460,6 +325,15 @@ impl<K, V, B> Index<K, V, B> {
             _ => unreachable!(),
         };
 
+        let root = match &metas[3] {
+            MetaItem::Root(root) => {
+                let root = io::SeekFrom::Start(*root);
+                let block = read_file!(&mut ifd, root, stats.m_blocksize, "read block")?;
+                util::from_cbor_bytes::<Vec<Entry<K, V, D>>>(&block)?.0
+            }
+            _ => unreachable!(),
+        };
+
         if let MetaItem::Marker(mrkr) = &metas[4] {
             if mrkr.ne(ROOT_MARKER.as_slice()) {
                 err_at!(Invalid, msg: "invalid marker {:?}", mrkr)?
@@ -481,6 +355,8 @@ impl<K, V, B> Index<K, V, B> {
             false => None,
         };
 
+        let reader = Reader::from_root(&stats, root, ifd, vlog)?;
+
         let val = Index {
             dir: dir.to_os_string(),
             name: name.to_string(),
@@ -489,8 +365,7 @@ impl<K, V, B> Index<K, V, B> {
             stats,
             bitmap: Arc::new(bitmap),
 
-            index: ifd,
-            vlog,
+            reader,
 
             _key: marker::PhantomData,
             _val: marker::PhantomData,
@@ -500,43 +375,45 @@ impl<K, V, B> Index<K, V, B> {
     }
 
     pub fn clone(&self) -> Result<Self> {
-        let index = match find_index_file(&self.dir, &self.name) {
-            Some(ip) => err_at!(IOError, fs::OpenOptions::new().read(true).open(&ip))?,
-            None => err_at!(Invalid, msg: "bad file {:?}/{}", &self.dir, &self.name)?,
-        };
+        //let index = match find_index_file(&self.dir, &self.name) {
+        //    Some(ip) => err_at!(IOError, fs::OpenOptions::new().read(true).open(&ip))?,
+        //    None => err_at!(Invalid, msg: "bad file {:?}/{}", &self.dir, &self.name)?,
+        //};
 
-        let vlog = match self.stats.value_in_vlog || self.stats.delta_ok {
-            true => {
-                let vlog_file = self.stats.vlog_file.as_ref();
-                let fnm = match vlog_file.map(|f| path::Path::new(f).file_name()) {
-                    Some(Some(fnm)) => fnm.to_os_string(),
-                    _ => ffi::OsString::from(VlogFileName::from(self.name.to_string())),
-                };
-                let vp: path::PathBuf = [self.dir.to_os_string(), fnm].iter().collect();
-                Some(err_at!(
-                    IOError,
-                    fs::OpenOptions::new().read(true).open(&vp)
-                )?)
-            }
-            false => None,
-        };
+        //let vlog = match self.stats.value_in_vlog || self.stats.delta_ok {
+        //    true => {
+        //        let vlog_file = self.stats.vlog_file.as_ref();
+        //        let fnm = match vlog_file.map(|f| path::Path::new(f).file_name()) {
+        //            Some(Some(fnm)) => fnm.to_os_string(),
+        //            _ => ffi::OsString::from(VlogFileName::from(self.name.to_string())),
+        //        };
+        //        let vp: path::PathBuf = [self.dir.to_os_string(), fnm].iter().collect();
+        //        Some(err_at!(
+        //            IOError,
+        //            fs::OpenOptions::new().read(true).open(&vp)
+        //        )?)
+        //    }
+        //    false => None,
+        //};
 
-        let val = Index {
-            dir: self.dir.clone(),
-            name: self.name.clone(),
+        //let val = Index {
+        //    dir: self.dir.clone(),
+        //    name: self.name.clone(),
 
-            metas: Arc::clone(&self.metas),
-            stats: self.stats.clone(),
-            bitmap: Arc::clone(&self.bitmap),
+        //    metas: Arc::clone(&self.metas),
+        //    stats: self.stats.clone(),
+        //    bitmap: Arc::clone(&self.bitmap),
 
-            index,
-            vlog,
+        //    index,
+        //    vlog,
 
-            _key: marker::PhantomData,
-            _val: marker::PhantomData,
-        };
+        //    _key: marker::PhantomData,
+        //    _val: marker::PhantomData,
+        //};
 
-        Ok(val)
+        //Ok(val)
+
+        todo!()
     }
 
     pub fn compact(
@@ -590,7 +467,7 @@ impl<K, V, B> Index<K, V, B> {
     }
 }
 
-impl<K, V, B> Index<K, V, B> {
+impl<K, V, B, D> Index<K, V, B, D> {
     pub fn to_name(&self) -> String {
         self.name.clone()
     }
@@ -636,7 +513,7 @@ impl<K, V, B> Index<K, V, B> {
         usize::try_from(self.stats.n_count).unwrap()
     }
 
-    pub fn get<Q, D>(&mut self, _key: &Q) -> Result<db::Entry<K, V, D>>
+    pub fn get<Q>(&mut self, _key: &Q) -> Result<db::Entry<K, V, D>>
     where
         K: Borrow<Q>,
         Q: Ord + ?Sized + Hash,

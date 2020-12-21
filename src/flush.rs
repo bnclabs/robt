@@ -8,7 +8,7 @@ use crate::{Error, Result};
 
 pub enum Flusher {
     File {
-        file_path: ffi::OsString,
+        file: ffi::OsString,
         fpos: u64,
         th: Option<thread::Thread<Vec<u8>, u64, Result<u64>>>,
         tx: Option<thread::Tx<Vec<u8>, u64>>,
@@ -19,36 +19,30 @@ pub enum Flusher {
 impl Drop for Flusher {
     fn drop(&mut self) {
         match self {
-            Flusher::File { file_path, .. } => {
-                info!( target: "robt", "dropping flusher for {:?}", file_path);
-            }
+            Flusher::File { file, .. } => info!(target: "robt-flush", "drop {:?}", file),
             Flusher::None => (),
         }
     }
 }
 
 impl Flusher {
-    pub fn new(
-        file_path: &ffi::OsStr,
-        create: bool,
-        flush_queue_size: usize,
-    ) -> Result<Flusher> {
+    pub fn new(file: &ffi::OsStr, create: bool, chan_size: usize) -> Result<Flusher> {
         let (fd, fpos) = if create {
-            (create_file_a(file_path)?, 0)
+            (create_file_a(file)?, 0)
         } else {
-            let fpos = err_at!(IOError, fs::metadata(file_path))?.len();
-            (open_file_a(file_path)?, fpos)
+            let fpos = err_at!(IOError, fs::metadata(file))?.len();
+            (open_file_a(file)?, fpos)
         };
 
-        let ffpp = file_path.to_os_string();
+        let ffpp = file.to_os_string();
         let (th, tx) = thread::Thread::new_sync(
             "flusher",
-            flush_queue_size,
+            chan_size,
             move |rx: thread::Rx<Vec<u8>, u64>| move || thread_flush(ffpp, fd, rx, fpos),
         );
 
         let val = Flusher::File {
-            file_path: file_path.to_os_string(),
+            file: file.to_os_string(),
             fpos,
             th: Some(th),
             tx: Some(tx),
@@ -63,7 +57,7 @@ impl Flusher {
 
     pub fn to_file_path(&self) -> ffi::OsString {
         match self {
-            Flusher::File { file_path, .. } => file_path.clone(),
+            Flusher::File { file, .. } => file.clone(),
             Flusher::None => unreachable!(),
         }
     }
@@ -97,55 +91,40 @@ impl Flusher {
 }
 
 fn thread_flush(
-    file_path: ffi::OsString,
+    file: ffi::OsString,
     mut fd: fs::File,
     rx: thread::Rx<Vec<u8>, u64>,
     mut fpos: u64,
 ) -> Result<u64> {
-    info!(target: "robt", "starting flusher for {:?} @ fpos {}", file_path, fpos);
+    info!(target: "robt-flush", "starting {:?} @ fpos {}", file, fpos);
 
-    err_at!(
-        IOError,
-        fd.lock_shared(),
-        "fail read lock for {:?}",
-        file_path
-    )?;
+    err_at!(IOError, fd.lock_shared(), "fail read lock for {:?}", file)?;
 
     for (data, res_tx) in rx {
-        let n = write_file!(fd, &data, &file_path, "flushing file")?;
-        if n != data.len() {
-            err_at!(IOError, fd.unlock(), "fail read unlock {:?}", file_path)?;
-            err_at!(IOError, msg: "partial flush for {:?}, {} != {}", file_path, n, data.len())?;
-        }
+        write_file!(fd, &data, &file, "flushing file")?;
 
         fpos += u64::try_from(data.len()).unwrap();
-        trace!(
-            target: "robt",
-            "flusher {:?} {} {}",
-            file_path,
-            data.len(),
-            fpos
-        );
+        trace!(target: "robt", "flusher {:?} {} {}", file, data.len(), fpos);
         res_tx.map(|tx| tx.send(fpos).ok());
     }
 
-    err_at!(IOError, fd.sync_all(), "fail sync_all {:?}", file_path)?;
-    err_at!(IOError, fd.unlock(), "fail read unlock {:?}", file_path)?;
+    err_at!(IOError, fd.sync_all(), "fail sync_all {:?}", file)?;
+    err_at!(IOError, fd.unlock(), "fail read unlock {:?}", file)?;
 
     Ok(fpos)
 }
 
 // create a file in append mode for writing.
-fn create_file_a(file_path: &ffi::OsStr) -> Result<fs::File> {
+fn create_file_a(file: &ffi::OsStr) -> Result<fs::File> {
     let os_file = {
-        let os_file = path::Path::new(file_path);
+        let os_file = path::Path::new(file);
         fs::remove_file(os_file).ok(); // NOTE: ignore remove errors.
         os_file
     };
 
     match os_file.parent() {
         Some(parent) => err_at!(IOError, fs::create_dir_all(parent))?,
-        None => err_at!(InvalidFile, msg: "{:?}", file_path)?,
+        None => err_at!(InvalidFile, msg: "{:?}", file)?,
     };
 
     let mut opts = fs::OpenOptions::new();
@@ -156,8 +135,10 @@ fn create_file_a(file_path: &ffi::OsStr) -> Result<fs::File> {
 }
 
 // open existing file in append mode for writing.
-fn open_file_a(file_path: &ffi::OsStr) -> Result<fs::File> {
-    let os_file = path::Path::new(file_path);
-    let mut opts = fs::OpenOptions::new();
-    Ok(err_at!(IOError, opts.append(true).open(os_file))?)
+fn open_file_a(file: &ffi::OsStr) -> Result<fs::File> {
+    let os_file = path::Path::new(file);
+    Ok(err_at!(
+        IOError,
+        fs::OpenOptions::new().append(true).open(os_file)
+    )?)
 }

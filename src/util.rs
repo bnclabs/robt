@@ -2,7 +2,7 @@ use mkit::cbor::{Cbor, FromCbor, IntoCbor};
 
 use crate::{Error, Result};
 
-pub fn to_cbor_bytes<T>(val: T) -> Result<Vec<u8>>
+pub fn into_cbor_bytes<T>(val: T) -> Result<Vec<u8>>
 where
     T: IntoCbor,
 {

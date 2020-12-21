@@ -68,15 +68,13 @@ where
     V: IntoCbor,
     D: IntoCbor,
 {
-    pub fn encode_zz(
-        self,
-        mut vfpos: u64,
-        value_in_vlog: bool,
-    ) -> Result<(Vec<u8>, Vec<u8>)> {
+    pub fn into_reference(self, mut vfpos: u64, vlog: bool) -> Result<(Self, Vec<u8>)> {
         match self {
+            val @ Entry::MM { .. } => Ok((val, vec![])),
+            val @ Entry::MZ { .. } => Ok((val, vec![])),
             Entry::ZZ { key, value, deltas } => {
-                let (value, mut vblock) = if value_in_vlog {
-                    value.encode(vfpos)?
+                let (value, mut vblock) = if vlog {
+                    value.into_reference(vfpos)?
                 } else {
                     (value, vec![])
                 };
@@ -85,76 +83,35 @@ where
 
                 vfpos += err_at!(FailConvert, u64::try_from(vblock.len()))?;
 
-                let mut deltas_ref = vec![];
+                let mut drefs = vec![];
                 for delta in deltas.into_iter() {
-                    let (delta, data) = delta.encode(vfpos)?;
-                    deltas_ref.push(delta);
+                    let (delta, data) = delta.into_reference(vfpos)?;
+                    drefs.push(delta);
                     vblock.extend_from_slice(&data);
                     vfpos += err_at!(FailConvert, u64::try_from(data.len()))?;
                 }
 
-                Cbor::try_from(cbor::SimpleValue::Break)?.encode(&mut vblock)?;
+                vblock
+                    .extend_from_slice(&util::into_cbor_bytes(cbor::SimpleValue::Break)?);
 
                 let entry = Entry::ZZ {
                     key,
                     value,
-                    deltas: deltas_ref,
+                    deltas: drefs,
                 };
 
-                let iblock = util::to_cbor_bytes(entry)?;
-
-                Ok((iblock, vblock))
+                Ok((entry, vblock))
             }
-            _ => unreachable!(),
         }
     }
 }
 
 impl<K, V, D> Entry<K, V, D> {
-    pub fn is_mblock(&self) -> bool {
-        match self {
-            Entry::MM { .. } => true,
-            Entry::MZ { .. } => true,
-            Entry::ZZ { .. } => false,
-        }
-    }
-
-    pub fn is_zblock(&self) -> bool {
-        !self.is_mblock()
-    }
-
-    pub fn is_child_zblock(&self) -> bool {
-        match self {
-            Entry::MZ { .. } => true,
-            Entry::MM { .. } => false,
-            Entry::ZZ { .. } => false,
-        }
-    }
-
-    pub fn to_fpos(&self) -> Option<u64> {
-        match self {
-            Entry::MZ { fpos, .. } => Some(*fpos),
-            Entry::MM { fpos, .. } => Some(*fpos),
-            Entry::ZZ { .. } => None,
-        }
-    }
-
     pub fn as_key(&self) -> &K {
         match self {
             Entry::MZ { key, .. } => key,
             Entry::MM { key, .. } => key,
             Entry::ZZ { key, .. } => key,
-        }
-    }
-
-    pub fn borrow_key<Q>(&self) -> &Q
-    where
-        K: Borrow<Q>,
-    {
-        match self {
-            Entry::MZ { key, .. } => key.borrow(),
-            Entry::MM { key, .. } => key.borrow(),
-            Entry::ZZ { key, .. } => key.borrow(),
         }
     }
 
@@ -166,6 +123,17 @@ impl<K, V, D> Entry<K, V, D> {
             Entry::MZ { key, .. } => key.clone(),
             Entry::MM { key, .. } => key.clone(),
             Entry::ZZ { key, .. } => key.clone(),
+        }
+    }
+
+    pub fn borrow_key<Q>(&self) -> &Q
+    where
+        K: Borrow<Q>,
+    {
+        match self {
+            Entry::MZ { key, .. } => key.borrow(),
+            Entry::MM { key, .. } => key.borrow(),
+            Entry::ZZ { key, .. } => key.borrow(),
         }
     }
 }

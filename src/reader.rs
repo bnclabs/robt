@@ -6,16 +6,16 @@ use std::{
     ops::{Bound, RangeBounds},
 };
 
-use crate::{entry::Entry, robt::Stats, util, Error, Result};
+use crate::{config::Stats, entry::Entry, util, Error, Result};
 
-struct Reader<K, V, D> {
+pub struct Reader<K, V, D> {
     m_blocksize: usize,
     z_blocksize: usize,
     v_blocksize: usize,
 
     index: fs::File,
     vlog: Option<fs::File>,
-    entries: Vec<Entry<K, V, D>>,
+    root: Vec<Entry<K, V, D>>,
 }
 
 impl<K, V, D> Reader<K, V, D>
@@ -25,23 +25,23 @@ where
     D: FromCbor,
 {
     pub fn from_root(
-        stats: &Stats,
         root: Vec<u8>,
+        stats: &Stats,
         index: fs::File,
         vlog: Option<fs::File>,
     ) -> Result<Self> {
-        let (entries, _) = util::from_cbor_bytes::<Vec<Entry<K, V, D>>>(&root)?;
+        let (root, _) = util::from_cbor_bytes::<Vec<Entry<K, V, D>>>(&root)?;
         Ok(Reader {
             m_blocksize: stats.m_blocksize,
             z_blocksize: stats.z_blocksize,
             v_blocksize: stats.v_blocksize,
             index,
             vlog,
-            entries,
+            root,
         })
     }
 
-    pub fn find<Q>(&mut self, key: &Q) -> Result<Entry<K, V, D>>
+    pub fn find<Q>(&mut self, ky: &Q) -> Result<Entry<K, V, D>>
     where
         K: Clone + Borrow<Q>,
         V: Clone,
@@ -51,32 +51,20 @@ where
         let m_blocksize = self.m_blocksize;
         let fd = &mut self.index;
 
-        let mut entries = self.entries.clone();
+        let mut es = self.root.clone();
         loop {
-            let off = match entries.binary_search_by(|e| e.borrow_key().cmp(key)) {
+            let off = match es.binary_search_by(|e| e.borrow_key().cmp(ky)) {
                 Ok(off) => off,
-                Err(off) => off.saturating_sub(1),
+                Err(off) if off == 0 => break err_at!(KeyNotFound, msg: "missing key"),
+                Err(off) => off - 1,
             };
-            match &entries[off] {
-                Entry::MM { fpos, .. } => {
-                    entries = self.read_block(*fpos)?;
-                }
-                Entry::MZ { fpos, .. } => {
-                    let entries = self.read_block(*fpos)?;
-                    match entries.binary_search_by(|x| x.borrow_key().cmp(key)) {
-                        Ok(off) => break Ok(entries[off].clone()),
-                        Err(off) => break err_at!(KeyNotFound, msg: "missing key"),
-                    };
-                }
-                Entry::ZZ { .. } => unreachable!(),
+            es = match &es[off] {
+                Entry::MM { fpos, .. } => read_entries(fd, *fpos, m_blocksize)?,
+                Entry::MZ { fpos, .. } => read_entries(fd, *fpos, m_blocksize)?,
+                e @ Entry::ZZ { .. } if e.borrow_key() == ky => break Ok(e.clone()),
+                _ => break err_at!(KeyNotFound, msg: "missing key"),
             }
         }
-    }
-
-    fn read_block(&mut self, fpos: u64) -> Result<Vec<Entry<K, V, D>>> {
-        let fpos = io::SeekFrom::Start(fpos);
-        let block = read_file!(&mut self.index, fpos, self.m_blocksize, "read block")?;
-        Ok(util::from_cbor_bytes::<Vec<Entry<K, V, D>>>(&block)?.0)
     }
 }
 
@@ -125,7 +113,7 @@ where
             return None;
         }
 
-        let e = try_result!(self.iter.next()?);
+        let e = iter_result!(self.iter.next()?);
         let key: &Q = e.borrow_key();
 
         match self.range.end_bound() {
@@ -153,67 +141,28 @@ pub struct Iter<'a, K, V, D> {
 }
 
 impl<'a, K, V, D> Iter<'a, K, V, D> {
-    fn new(
-        reader: &'a mut Reader<K, V, D>,
-        stack: Vec<Vec<Entry<K, V, D>>>,
-        reverse: bool,
-    ) -> Self {
+    fn new_fwd(r: &'a mut Reader<K, V, D>, stack: Vec<Vec<Entry<K, V, D>>>) -> Self {
         Iter {
-            reader,
+            reader: r,
             stack,
-            reverse,
+            reverse: false,
+
             _key: marker::PhantomData,
             _val: marker::PhantomData,
             _dff: marker::PhantomData,
         }
     }
-}
 
-impl<'a, K, V, D> Iter<'a, K, V, D>
-where
-    K: FromCbor,
-    V: FromCbor,
-    D: FromCbor,
-{
-    fn next_fwd(&mut self) -> Option<Result<db::Entry<K, V, D>>> {
-        match self.stack.last_mut() {
-            Some(es) if es.len() > 0 => match es.remove(0) {
-                entry @ Entry::ZZ { .. } => Some(Ok(entry.into())),
-                Entry::MZ { key, fpos } => {
-                    self.stack.push(try_result!(self.reader.read_block(fpos)));
-                    self.next_fwd()
-                }
-                Entry::MM { key, fpos } => {
-                    self.stack.push(try_result!(self.reader.read_block(fpos)));
-                    self.next_fwd()
-                }
-            },
-            Some(es) => {
-                self.stack.pop();
-                self.next_fwd()
-            }
-            None => None,
-        }
-    }
+    fn new_rwd(r: &'a mut Reader<K, V, D>, mut stack: Vec<Vec<Entry<K, V, D>>>) -> Self {
+        stack.iter_mut().map(|x| x.reverse());
+        Iter {
+            reader: r,
+            stack,
+            reverse: true,
 
-    fn next_rwd(&mut self) -> Option<Result<db::Entry<K, V, D>>> {
-        match self.stack.last_mut() {
-            Some(es) => match es.pop() {
-                Some(entry @ Entry::ZZ { .. }) => Some(Ok(entry.into())),
-                Some(Entry::MZ { key, fpos }) => {
-                    self.stack.push(try_result!(self.reader.read_block(fpos)));
-                    self.next_rwd()
-                }
-                Some(Entry::MM { key, fpos }) => {
-                    self.stack.push(try_result!(self.reader.read_block(fpos)));
-                    self.next_rwd()
-                }
-                None => {
-                    self.stack.pop();
-                    self.next_rwd()
-                }
-            },
-            None => None,
+            _key: marker::PhantomData,
+            _val: marker::PhantomData,
+            _dff: marker::PhantomData,
         }
     }
 }
@@ -227,9 +176,38 @@ where
     type Item = Result<db::Entry<K, V, D>>;
 
     fn next(&mut self) -> Option<Self::Item> {
-        match self.reverse {
-            false => self.next_fwd(),
-            true => self.next_rwd(),
+        let fd = &mut self.reader.index;
+        let m_blocksize = self.reader.m_blocksize;
+
+        match self.stack.pop() {
+            Some(mut es) => match es.pop() {
+                Some(entry @ Entry::ZZ { .. }) => {
+                    self.stack.push(es);
+                    Some(Ok(entry.into()))
+                }
+                Some(Entry::MM { fpos, .. }) | Some(Entry::MZ { fpos, .. }) => {
+                    self.stack.push(es);
+                    let x = iter_result!(read_entries(fd, fpos, m_blocksize));
+                    self.stack.push(x);
+                    self.next()
+                }
+                None => self.next(),
+            },
+            None => None,
         }
     }
+}
+
+pub fn read_entries<K, V, D>(
+    fd: &mut fs::File,
+    fpos: u64,
+    n: usize,
+) -> Result<Vec<Entry<K, V, D>>>
+where
+    K: FromCbor,
+    V: FromCbor,
+    D: FromCbor,
+{
+    let block = read_file!(fd, io::SeekFrom::Start(fpos), n, "read block")?;
+    Ok(util::from_cbor_bytes::<Vec<Entry<K, V, D>>>(&block)?.0)
 }
