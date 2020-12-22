@@ -1,3 +1,42 @@
+//! Package implement an immutable read-only BTree.
+//!
+//! Use [Builder] type to build a new index. And subsequently load the
+//! index using the [Index] type. Index can be concurrently accessed by
+//! cloning the `Index` type. Note that a single Index instance cannot be
+//! shared among threads. Once an index is built using the `Builder` type
+//! it is not possible to modify them. While strict immutablility might
+//! seem like an inconvinience, they have certain advantages,
+//!
+//! * They are fully packed and hence less overhead and lesser tree depth.
+//! * Easy and efficient caching of btree-blocks.
+//!
+//! Inventory of features in `robt` index:
+//!
+//! * Index can be parameters over a Key-type and Value-type.
+//! * Uses Cbor for serialization and deserialization.
+//! * Key and Value types can be made `robt` compliant by `derive(Cborize)`.
+//! * Value can either be stored in leaf-node or in a separate log-file.
+//! * Additionally, incoming iterator, to build index, can supply older
+//!   versions for value using the [Diff] mechanics.
+//! * Bloom filter can help optimize false lookups.
+//! * API get() operation, with bloom-filter support.
+//! * API iter() and reverse() operation for forward and reverse iteration.
+//! * API iter_version() and reverse_version() operation similar to
+//!   iter/reverse but also fetches older versions for a entry. Note that
+//!   iter/reverse do not fetch the older versions.
+//!
+//! **Value-log file**
+//!
+//! Values and its deltas (older versions) can be stored in a separate log
+//! file. This can the following advantage,
+//!
+//! * Keep the leaf-node extremely compact and help better caching.
+//! * Efficient when building multi-level index.
+//! * Applications typically deal with older-versions as archives.
+//!
+//! While storing value in the value-log file is optional, deltas are always
+//! stored in separate value-log file.
+//!
 //! **Compaction**
 //!
 //! Compaction is the process of de-duplicating/removing entries
@@ -33,6 +72,9 @@
 //! Tombstone compaction is similar to `lsm-compaction` with one main
 //! difference. When application logic issue `tombstone-compaction` only
 //! deleted entries that are older than specified seqno will be purged.
+
+#[allow(unused_imports)]
+use mkit::traits::Diff;
 
 use std::{error, fmt, result};
 
