@@ -3,7 +3,7 @@ use mkit::{
     db,
 };
 
-use std::{cell::RefCell, convert::TryFrom, hash::Hash, rc::Rc};
+use std::{cell::RefCell, convert::TryFrom, rc::Rc};
 
 use crate::{
     config::Config, entry::Entry, flush::Flusher, scans::BuildScan, util, Result,
@@ -42,7 +42,7 @@ impl<K, V, D, I> BuildMM<K, V, D, I> {
 
 impl<K, V, D, I> Iterator for BuildMM<K, V, D, I>
 where
-    K: Clone + Hash + IntoCbor,
+    K: Clone + IntoCbor,
     V: Clone + IntoCbor,
     D: Clone + IntoCbor,
     I: Iterator<Item = db::Entry<K, V, D>>,
@@ -270,7 +270,7 @@ impl<K, V, D, I> From<BuildMM<K, V, D, I>> for BuildIter<K, V, D, I> {
 
 impl<K, V, D, I> Iterator for BuildIter<K, V, D, I>
 where
-    K: Clone + Hash + IntoCbor,
+    K: Clone + IntoCbor,
     V: Clone + IntoCbor,
     D: Clone + IntoCbor,
     I: Iterator<Item = db::Entry<K, V, D>>,

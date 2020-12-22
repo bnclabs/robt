@@ -36,7 +36,7 @@ use crate::{
 /// Marker block size, not to be tampered with.
 const MARKER_BLOCK_SIZE: usize = 1024 * 4;
 
-pub struct Builder<K, V> {
+pub struct Builder<K, V, D> {
     // configuration
     config: Config,
     // active values
@@ -49,9 +49,10 @@ pub struct Builder<K, V> {
 
     _key: marker::PhantomData<K>,
     _val: marker::PhantomData<V>,
+    _dff: marker::PhantomData<D>,
 }
 
-impl<K, V> Builder<K, V> {
+impl<K, V, D> Builder<K, V, D> {
     pub fn initial(c: Config, app_meta: Vec<u8>) -> Result<Self> {
         let queue_size = c.flush_queue_size;
         let iflush = {
@@ -76,6 +77,7 @@ impl<K, V> Builder<K, V> {
 
             _key: marker::PhantomData,
             _val: marker::PhantomData,
+            _dff: marker::PhantomData,
         };
 
         Ok(val)
@@ -108,23 +110,24 @@ impl<K, V> Builder<K, V> {
 
             _key: marker::PhantomData,
             _val: marker::PhantomData,
+            _dff: marker::PhantomData,
         };
 
         Ok(val)
     }
 }
 
-impl<K, V> BuildIndex<K, V, NoBitmap> for Builder<K, V>
+impl<K, V, D> BuildIndex<K, V, D, NoBitmap> for Builder<K, V, D>
 where
-    K: Clone + Hash + IntoCbor,
+    K: Clone + IntoCbor,
     V: Clone + IntoCbor,
+    D: Clone + IntoCbor,
 {
     type Err = Error;
 
-    fn from_iter<I, D>(mut self, iter: I, _: NoBitmap) -> Result<()>
+    fn from_iter<I>(mut self, iter: I, _: NoBitmap) -> Result<()>
     where
         I: Iterator<Item = db::Entry<K, V, D>>,
-        D: Clone + IntoCbor,
     {
         let iter = BuildScan::new(iter, 0 /*seqno*/);
         let _iter = self.build_from_iter(iter)?;
@@ -134,18 +137,18 @@ where
     }
 }
 
-impl<K, V, B> BuildIndex<K, V, B> for Builder<K, V>
+impl<K, V, D, B> BuildIndex<K, V, D, B> for Builder<K, V, D>
 where
     K: Clone + Hash + IntoCbor,
     V: Clone + IntoCbor,
+    D: Clone + IntoCbor,
     B: Bloom,
 {
     type Err = Error;
 
-    fn from_iter<I, D>(mut self, iter: I, bitmap: B) -> Result<()>
+    fn from_iter<I>(mut self, iter: I, bitmap: B) -> Result<()>
     where
         I: Iterator<Item = db::Entry<K, V, D>>,
-        D: Clone + IntoCbor,
     {
         let iter = {
             let iter = BitmappedScan::<K, V, D, B, I>::new(iter, bitmap);
@@ -163,12 +166,12 @@ where
     }
 }
 
-impl<K, V> Builder<K, V>
+impl<K, V, D> Builder<K, V, D>
 where
-    K: Clone + Hash + IntoCbor,
+    K: Clone + IntoCbor,
     V: Clone + IntoCbor,
 {
-    fn build_from_iter<I, D>(&mut self, iter: BuildScan<K, V, D, I>) -> Result<I>
+    fn build_from_iter<I>(&mut self, iter: BuildScan<K, V, D, I>) -> Result<I>
     where
         I: Iterator<Item = db::Entry<K, V, D>>,
         D: Clone + IntoCbor,
@@ -187,7 +190,7 @@ where
         Ok(iter)
     }
 
-    fn build_tree<I, D>(
+    fn build_tree<I>(
         &self,
         iter: BuildScan<K, V, D, I>,
     ) -> Result<(BuildScan<K, V, D, I>, u64)>
@@ -418,6 +421,7 @@ where
         mut self,
         dir: &ffi::OsStr,
         name: &str,
+        bitmap: B,
         cutoff: db::Cutoff,
     ) -> Result<Self>
     where
@@ -434,11 +438,11 @@ where
 
         let builder = {
             let app_meta = self.to_app_metadata();
-            Builder::<K, V>::initial(config, app_meta)?
+            Builder::<K, V, D>::initial(config, app_meta)?
         };
         let r = (Bound::<K>::Unbounded, Bound::<K>::Unbounded);
         let iter = CompactScan::new(self.iter(r)?.map(|e| e.unwrap()), cutoff);
-        <Builder<K, V> as BuildIndex<K, V, B>>::from_iter(builder, iter, B::default())?;
+        <Builder<K, V, D> as BuildIndex<K, V, D, B>>::from_iter(builder, iter, bitmap)?;
 
         Index::open(dir, name)
     }
