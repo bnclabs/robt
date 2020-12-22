@@ -61,25 +61,23 @@ impl<K, V, D, I> BuildScan<K, V, D, I> {
 
 impl<K, V, D, I> Iterator for BuildScan<K, V, D, I>
 where
-    I: Iterator<Item = Result<db::Entry<K, V, D>>>,
+    I: Iterator<Item = db::Entry<K, V, D>>,
 {
-    type Item = Result<db::Entry<K, V, D>>;
+    type Item = db::Entry<K, V, D>;
 
     #[inline]
     fn next(&mut self) -> Option<Self::Item> {
         match self.entry.take() {
-            Some(entry) => Some(Ok(entry)),
-            None => match self.iter.next()? {
-                Ok(entry) => {
-                    self.seqno = cmp::max(self.seqno, entry.to_seqno());
-                    self.n_count += 1;
-                    if entry.is_deleted() {
-                        self.n_deleted += 1;
-                    }
-                    Some(Ok(entry))
+            Some(entry) => Some(entry),
+            None => {
+                let entry = self.iter.next()?;
+                self.seqno = cmp::max(self.seqno, entry.to_seqno());
+                self.n_count += 1;
+                if entry.is_deleted() {
+                    self.n_deleted += 1;
                 }
-                Err(err) => Some(Err(err)),
-            },
+                Some(entry)
+            }
         }
     }
 }
@@ -100,10 +98,10 @@ impl<K, V, D, B, I> BitmappedScan<K, V, D, B, I>
 where
     B: Bloom,
 {
-    pub fn new(iter: I) -> BitmappedScan<K, V, D, B, I> {
+    pub fn new(iter: I, bitmap: B) -> BitmappedScan<K, V, D, B, I> {
         BitmappedScan {
             iter,
-            bitmap: <B as Bloom>::create(),
+            bitmap,
             _key: marker::PhantomData,
             _val: marker::PhantomData,
             _dff: marker::PhantomData,
@@ -119,19 +117,15 @@ impl<K, V, D, B, I> Iterator for BitmappedScan<K, V, D, B, I>
 where
     K: hash::Hash,
     B: Bloom,
-    I: Iterator<Item = Result<db::Entry<K, V, D>>>,
+    I: Iterator<Item = db::Entry<K, V, D>>,
 {
-    type Item = Result<db::Entry<K, V, D>>;
+    type Item = db::Entry<K, V, D>;
 
     #[inline]
     fn next(&mut self) -> Option<Self::Item> {
-        match self.iter.next()? {
-            Ok(entry) => {
-                self.bitmap.add_key(&entry.key);
-                Some(Ok(entry))
-            }
-            Err(err) => Some(Err(err)),
-        }
+        let entry = self.iter.next()?;
+        self.bitmap.add_key(&entry.key);
+        Some(entry)
     }
 }
 
@@ -161,19 +155,18 @@ impl<K, V, D, I> CompactScan<K, V, D, I> {
 
 impl<K, V, D, I> Iterator for CompactScan<K, V, D, I>
 where
-    I: Iterator<Item = Result<db::Entry<K, V, D>>>,
+    I: Iterator<Item = db::Entry<K, V, D>>,
 {
-    type Item = Result<db::Entry<K, V, D>>;
+    type Item = db::Entry<K, V, D>;
 
     #[inline]
     fn next(&mut self) -> Option<Self::Item> {
         loop {
             match self.iter.next() {
-                Some(Ok(entry)) => match entry.purge(self.cutoff) {
-                    Some(entry) => break Some(Ok(entry)),
+                Some(entry) => match entry.purge(self.cutoff) {
+                    Some(entry) => break Some(entry),
                     None => (),
                 },
-                Some(Err(err)) => break Some(Err(err)),
                 None => break None,
             }
         }

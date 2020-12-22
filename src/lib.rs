@@ -134,15 +134,17 @@ mod entry;
 mod files;
 mod flush;
 mod marker;
-mod nobitmap;
 mod reader;
-//mod robt;
+mod robt;
 mod scans;
 mod util;
 mod vlog;
 
-pub use config::{Config, FLUSH_QUEUE_SIZE, MBLOCKSIZE, VBLOCKSIZE, ZBLOCKSIZE};
-// pub use robt::{Builder, Config, Index, Stats};
+#[derive(Clone)]
+pub struct NoBitmap;
+
+pub use config::{Config, Stats, FLUSH_QUEUE_SIZE, MBLOCKSIZE, VBLOCKSIZE, ZBLOCKSIZE};
+pub use robt::{Builder, Index};
 
 /// Type alias for Result return type, used by this package.
 pub type Result<T> = result::Result<T, Error>;

@@ -136,6 +136,14 @@ impl<K, V, D> Entry<K, V, D> {
             Entry::ZZ { key, .. } => key.borrow(),
         }
     }
+
+    pub fn is_zblock(&self) -> bool {
+        match self {
+            Entry::MZ { .. } => false,
+            Entry::MM { .. } => false,
+            Entry::ZZ { .. } => true,
+        }
+    }
 }
 
 //#[cfg(test)]

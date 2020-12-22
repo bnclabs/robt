@@ -12,10 +12,10 @@ pub struct Reader<K, V, D> {
     m_blocksize: usize,
     z_blocksize: usize,
     v_blocksize: usize,
+    root: Vec<Entry<K, V, D>>,
 
     index: fs::File,
     vlog: Option<fs::File>,
-    root: Vec<Entry<K, V, D>>,
 }
 
 impl<K, V, D> Reader<K, V, D>
@@ -25,27 +25,33 @@ where
     D: FromCbor,
 {
     pub fn from_root(
-        root: Vec<u8>,
+        root: u64,
         stats: &Stats,
-        index: fs::File,
+        mut index: fs::File,
         vlog: Option<fs::File>,
     ) -> Result<Self> {
-        let (root, _) = util::from_cbor_bytes::<Vec<Entry<K, V, D>>>(&root)?;
+        let root: Vec<Entry<K, V, D>> = {
+            let fpos = io::SeekFrom::Start(root);
+            let block = read_file!(&mut index, fpos, stats.m_blocksize, "read block")?;
+            util::from_cbor_bytes(&block)?.0
+        };
+
         Ok(Reader {
             m_blocksize: stats.m_blocksize,
             z_blocksize: stats.z_blocksize,
             v_blocksize: stats.v_blocksize,
+            root,
+
             index,
             vlog,
-            root,
         })
     }
 
-    pub fn find<Q>(&mut self, ky: &Q) -> Result<Entry<K, V, D>>
+    pub fn get<Q>(&mut self, ukey: &Q) -> Result<Entry<K, V, D>>
     where
         K: Clone + Borrow<Q>,
         V: Clone,
-        D: Clone,
+        D: Clone + FromCbor,
         Q: Ord,
     {
         let m_blocksize = self.m_blocksize;
@@ -53,19 +59,127 @@ where
 
         let mut es = self.root.clone();
         loop {
-            let off = match es.binary_search_by(|e| e.borrow_key().cmp(ky)) {
+            let off = match es.binary_search_by(|e| e.borrow_key().cmp(ukey)) {
                 Ok(off) => off,
                 Err(off) if off == 0 => break err_at!(KeyNotFound, msg: "missing key"),
                 Err(off) => off - 1,
             };
             es = match &es[off] {
-                Entry::MM { fpos, .. } => read_entries(fd, *fpos, m_blocksize)?,
-                Entry::MZ { fpos, .. } => read_entries(fd, *fpos, m_blocksize)?,
-                e @ Entry::ZZ { .. } if e.borrow_key() == ky => break Ok(e.clone()),
+                Entry::MM { fpos, .. } => {
+                    let fpos = io::SeekFrom::Start(*fpos);
+                    let block = read_file!(fd, fpos, m_blocksize, "read mm-block")?;
+                    util::from_cbor_bytes::<Vec<Entry<K, V, D>>>(&block)?.0
+                }
+                Entry::MZ { fpos, .. } => {
+                    let fpos = io::SeekFrom::Start(*fpos);
+                    let block = read_file!(fd, fpos, m_blocksize, "read mz-block")?;
+                    util::from_cbor_bytes::<Vec<Entry<K, V, D>>>(&block)?.0
+                }
+                e @ Entry::ZZ { .. } if e.borrow_key() == ukey => break Ok(e.clone()),
                 _ => break err_at!(KeyNotFound, msg: "missing key"),
             }
         }
     }
+
+    fn cmp_skey(key: &K, skey: Bound<&Q>, z: bool) -> cmp::Ordering {
+        match skey {
+            Bound::Unbounded => cmp::Ording::Less,
+            Bound::Included(skey) => key.borrow().cmp(skey),
+            Bound::Excluded(skey) if z => match key.borrow().cmp(skey) {
+                cmp::Ordering::Equal => cmp::Ordering::Less,
+                c => c,
+            }
+            Bound::Excluded(skey) => key.borrow().cmp(skey),
+        }
+    }
+
+    pub fn iter<Q, R>(&mut self, r: R) -> IterTill<K, V, D, Q, R>
+    where
+        K: Clone + FromCbor + Borrow<Q>,
+        V: Clone + FromCbor,
+        D: Clone + FromCbor,
+        R: RangeBounds<Q>,
+        Q: Ord,
+    {
+        let m_blocksize = self.m_blocksize;
+        let fd = &mut self.index;
+        let mut stack = vec![];
+
+        let skey = r.start_bound();
+        let mut es = self.root.clone();
+        let stack = loop {
+            let z = match es.first().map(|e| e.is_zblock()) {
+                Some(z) => z,
+                None => break stack,
+            };
+            let off = match es.binary_search_by(|e| Self::cmp_skey(e.as_key(), skey, z)) {
+                Ok(off) => off,
+                Err(off) if off == es.len() => break stack,
+                Err(off) => off.saturating_sub(1),
+            };
+            let rem = es[off..].to_vec();
+            es = match rem.remove(0) {
+                Entry::MM { fpos, .. } => {
+                    stack.push(rem)
+                    let fpos = io::SeekFrom::Start(*fpos);
+                    let block = read_file!(fd, fpos, m_blocksize, "read mm-block")?;
+                    util::from_cbor_bytes::<Vec<Entry<K, V, D>>>(&block)?.0
+                }
+                Entry::MZ { fpos, .. } => {
+                    stack.push(rem)
+                    let fpos = io::SeekFrom::Start(*fpos);
+                    let block = read_file!(fd, fpos, m_blocksize, "read mz-block")?;
+                    util::from_cbor_bytes::<Vec<Entry<K, V, D>>>(&block)?.0
+                }
+                e = Entry::ZZ { key, .. } {
+                    stack.push(rem);
+                    break stack
+                }
+                None => break stack
+            }
+       };
+
+       let iter = Iter::new_fwd(self, stack);
+       Ok(IterTill::new(iter, RangeFull))
+    }
+
+    //pub fn iter_from<Q>(&mut self, ukey: Bound<&Q>) -> Result<Entry<K, V, D>>
+    //where
+    //    K: Clone + Borrow<Q>,
+    //    V: Clone,
+    //    D: Clone + FromCbor,
+    //    Q: Ord,
+    //{
+    //    let m_blocksize = self.m_blocksize;
+    //    let fd = &mut self.index;
+    //    let mut stack = vec![];
+
+    //    let mut es = self.root.clone();
+    //    let stack = loop {
+    //        let (entry, rem) = match es.binary_search_by(|e| e.borrow_key().cmp(ukey)) {
+    //            Ok(off) => (es.remove(0), es[off..].to_vec()),
+    //            Err(off) if off == es.len() => break stack,
+    //            Err(off) => (es.remove(0), es[off..].to_vec()),
+    //        };
+
+    //        stack.push(rem);
+
+    //        es = match entry {
+    //            Entry::MM { fpos, .. } => {
+    //                let fpos = io::SeekFrom::Start(*fpos);
+    //                let block = read_file!(fd, fpos, m_blocksize, "read mm-block")?;
+    //                util::from_cbor_bytes::<Vec<Entry<K, V, D>>>(&block)?.0
+    //            }
+    //            Entry::MZ { fpos, .. } => {
+    //                let fpos = io::SeekFrom::Start(*fpos);
+    //                let block = read_file!(fd, fpos, m_blocksize, "read mz-block")?;
+    //                util::from_cbor_bytes::<Vec<Entry<K, V, D>>>(&block)?.0
+    //            }
+    //            e @ Entry::ZZ { .. } if e.borrow_key() == ukey => break Ok(e.clone()),
+    //            _ => break err_at!(KeyNotFound, msg: "missing key"),
+    //        }
+    //    }
+    //}
 }
 
 pub struct IterTill<'a, K, V, D, Q, R>
@@ -87,7 +201,7 @@ where
     Q: Ord,
     R: RangeBounds<Q>,
 {
-    fn new(range: R, iter: Iter<'a, K, V, D>) -> Self {
+    fn new(iter: Iter<'a, K, V, D>, r: R) -> Self {
         IterTill {
             range,
             iter,
@@ -137,7 +251,6 @@ pub struct Iter<'a, K, V, D> {
 
     _key: marker::PhantomData<K>,
     _val: marker::PhantomData<V>,
-    _dff: marker::PhantomData<D>,
 }
 
 impl<'a, K, V, D> Iter<'a, K, V, D> {
@@ -149,7 +262,6 @@ impl<'a, K, V, D> Iter<'a, K, V, D> {
 
             _key: marker::PhantomData,
             _val: marker::PhantomData,
-            _dff: marker::PhantomData,
         }
     }
 
@@ -162,7 +274,6 @@ impl<'a, K, V, D> Iter<'a, K, V, D> {
 
             _key: marker::PhantomData,
             _val: marker::PhantomData,
-            _dff: marker::PhantomData,
         }
     }
 }
@@ -187,8 +298,13 @@ where
                 }
                 Some(Entry::MM { fpos, .. }) | Some(Entry::MZ { fpos, .. }) => {
                     self.stack.push(es);
-                    let x = iter_result!(read_entries(fd, fpos, m_blocksize));
-                    self.stack.push(x);
+
+                    let entries = iter_result!(|| -> Result<Vec<Entry<K, V, D>>> {
+                        let fpos = io::SeekFrom::Start(fpos);
+                        let block = read_file!(fd, fpos, m_blocksize, "read mm-block")?;
+                        Ok(util::from_cbor_bytes(&block)?.0)
+                    }());
+                    self.stack.push(entries);
                     self.next()
                 }
                 None => self.next(),

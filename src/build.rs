@@ -45,7 +45,7 @@ where
     K: Clone + Hash + IntoCbor,
     V: Clone + IntoCbor,
     D: Clone + IntoCbor,
-    I: Iterator<Item = Result<db::Entry<K, V, D>>>,
+    I: Iterator<Item = db::Entry<K, V, D>>,
 {
     type Item = Result<(K, u64)>;
 
@@ -121,7 +121,7 @@ where
     K: Clone + IntoCbor,
     V: Clone + IntoCbor,
     D: Clone + IntoCbor,
-    I: Iterator<Item = Result<db::Entry<K, V, D>>>,
+    I: Iterator<Item = db::Entry<K, V, D>>,
 {
     type Item = Result<(K, u64)>;
 
@@ -197,7 +197,7 @@ where
     K: Clone + IntoCbor,
     V: Clone + IntoCbor,
     D: Clone + IntoCbor,
-    I: Iterator<Item = Result<db::Entry<K, V, D>>>,
+    I: Iterator<Item = db::Entry<K, V, D>>,
 {
     type Item = Result<(K, u64)>;
 
@@ -220,7 +220,7 @@ where
 
         loop {
             match iter.next() {
-                Some(Ok(entry)) => {
+                Some(entry) => {
                     first_key.get_or_insert_with(|| entry.key.clone());
                     let (e, vbytes) = {
                         let e = Entry::<K, V, D>::from(entry.clone());
@@ -236,7 +236,6 @@ where
                     vblock.extend_from_slice(&vbytes);
                     vfpos += u64::try_from(vbytes.len()).unwrap();
                 }
-                Some(Err(err)) => return Some(Err(err)),
                 None if first_key.is_some() => break,
                 None => return None,
             }
@@ -274,7 +273,7 @@ where
     K: Clone + Hash + IntoCbor,
     V: Clone + IntoCbor,
     D: Clone + IntoCbor,
-    I: Iterator<Item = Result<db::Entry<K, V, D>>>,
+    I: Iterator<Item = db::Entry<K, V, D>>,
 {
     type Item = Result<(K, u64)>;
 

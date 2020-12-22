@@ -3,7 +3,7 @@ use log::debug;
 use mkit::{
     self,
     cbor::{Cbor, FromCbor, IntoCbor},
-    db,
+    db::{self, BuildIndex, NoDiff},
     traits::{Bloom, Diff},
     Cborize,
 };
@@ -24,26 +24,20 @@ use std::{
 
 use crate::{
     build,
+    config::{Config, Stats},
     entry::Entry,
     files::{IndexFileName, VlogFileName},
     flush::Flusher,
     marker::ROOT_MARKER,
-    nobitmap::NoBitmap,
     reader::Reader,
     scans::{BitmappedScan, BuildScan, CompactScan},
-    util, Error, Result,
+    util, Error, NoBitmap, Result,
 };
 
 /// Marker block size, not to be tampered with.
 const MARKER_BLOCK_SIZE: usize = 1024 * 4;
 
-pub struct Builder<K, V, B = NoBitmap>
-where
-    K: Clone + Hash + IntoCbor,
-    V: Clone + Diff + IntoCbor,
-    <V as Diff>::D: IntoCbor,
-    B: Bloom,
-{
+pub struct Builder<K, V> {
     // configuration
     config: Config,
     // active values
@@ -52,21 +46,14 @@ where
     // final result to be persisted
     app_meta: Vec<u8>,
     stats: Stats,
-    bitmap: B,
     root: u64,
 
     _key: marker::PhantomData<K>,
     _val: marker::PhantomData<V>,
 }
 
-impl<K, V, B> Builder<K, V, B>
-where
-    K: Clone + Hash + IntoCbor,
-    V: Clone + Diff + IntoCbor,
-    <V as Diff>::D: IntoCbor,
-    B: Bloom,
-{
-    pub fn initial(c: Config, app_meta: Vec<u8>) -> Result<Builder<K, V, B>> {
+impl<K, V> Builder<K, V> {
+    pub fn initial(c: Config, app_meta: Vec<u8>) -> Result<Self> {
         let queue_size = c.flush_queue_size;
         let iflush = {
             let file_path = to_index_file(&c.dir, &c.name);
@@ -86,7 +73,6 @@ where
 
             app_meta,
             stats: Stats::default(),
-            bitmap: B::create(),
             root: u64::default(),
 
             _key: marker::PhantomData,
@@ -100,7 +86,7 @@ where
         c: Config,
         vlog_file: ffi::OsString,
         app_meta: Vec<u8>,
-    ) -> Result<Builder<K, V, B>> {
+    ) -> Result<Self> {
         let queue_size = c.flush_queue_size;
         let iflush = {
             let file_path = to_index_file(&c.dir, &c.name);
@@ -119,7 +105,6 @@ where
 
             app_meta,
             stats: Stats::default(),
-            bitmap: B::create(),
             root: u64::default(),
 
             _key: marker::PhantomData,
@@ -130,55 +115,89 @@ where
     }
 }
 
-impl<K, V, B> Builder<K, V, B>
+impl<K, V> BuildIndex<K, V, NoBitmap> for Builder<K, V>
 where
     K: Clone + Hash + IntoCbor,
-    V: Clone + Diff + IntoCbor,
-    <V as Diff>::D: IntoCbor,
+    V: Clone + IntoCbor,
+{
+    type Err = Error;
+
+    fn from_iter<I, D>(mut self, iter: I, bitmap: NoBitmap) -> Result<()>
+    where
+        I: Iterator<Item = db::Entry<K, V, D>>,
+        D: Clone + IntoCbor,
+    {
+        let iter = BuildScan::new(iter, 0 /*seqno*/);
+        let iter = self.build_from_iter(iter)?;
+        self.build_flush(vec![] /*bitmap*/)?;
+
+        Ok(())
+    }
+}
+
+impl<K, V, B> BuildIndex<K, V, B> for Builder<K, V>
+where
+    K: Clone + Hash + IntoCbor,
+    V: Clone + IntoCbor,
     B: Bloom,
 {
-    pub fn build_from_iter<I>(mut self, iter: I) -> Result<Stats>
+    type Err = Error;
+
+    fn from_iter<I, D>(mut self, iter: I, bitmap: B) -> Result<()>
     where
-        I: Iterator<Item = Result<db::Entry<K, V, <V as Diff>::D>>>,
+        I: Iterator<Item = db::Entry<K, V, D>>,
+        D: Clone + IntoCbor,
     {
         let iter = {
-            let seqno = 0_64;
-            BuildScan::new(
-                BitmappedScan::<K, V, <V as Diff>::D, B, I>::new(iter),
-                seqno,
-            )
+            let iter = BitmappedScan::<K, V, D, B, I>::new(iter, bitmap);
+            BuildScan::new(iter, 0 /*seqno*/)
         };
+
+        let iter = self.build_from_iter(iter)?;
+
+        let (bitmap, _) = iter.unwrap()?;
+        self.stats.n_bitmap = err_at!(Fatal, bitmap.len(), "bitmap.len")?;
+
+        self.build_flush(bitmap.to_vec())?;
+
+        Ok(())
+    }
+}
+
+impl<K, V> Builder<K, V>
+where
+    K: Clone + Hash + IntoCbor,
+    V: Clone + IntoCbor,
+{
+    fn build_from_iter<I, D>(&mut self, iter: BuildScan<K, V, D, I>) -> Result<I>
+    where
+        I: Iterator<Item = db::Entry<K, V, D>>,
+        D: Clone + IntoCbor,
+    {
         let (iter, root) = self.build_tree(iter)?;
         let (build_time, seqno, n_count, n_deleted, epoch, iter) = iter.unwrap()?;
-        let (bitmap, _) = iter.unwrap()?;
+        self.root = root;
         self.stats.n_count = n_count;
         self.stats.n_deleted = n_deleted.try_into().unwrap();
         self.stats.build_time = build_time;
         self.stats.epoch = epoch;
         self.stats.seqno = seqno;
 
-        let stats = {
-            self.stats.n_bitmap = bitmap.len()?;
-            self.stats.n_abytes = self.vflush.as_ref().borrow().to_fpos().unwrap_or(0);
-            self.stats.clone()
-        };
+        self.stats.n_abytes = self.vflush.as_ref().borrow().to_fpos().unwrap_or(0);
 
-        self.root = root;
-        self.bitmap = bitmap;
-
-        self.build_flush()?;
-
-        Ok(stats)
+        Ok(iter)
     }
 
-    fn build_tree<I>(
+    fn build_tree<I, D>(
         &self,
-        iter: BuildScan<K, V, <V as Diff>::D, I>,
-    ) -> Result<(BuildScan<K, V, <V as Diff>::D, I>, u64)>
+        iter: BuildScan<K, V, D, I>,
+    ) -> Result<(BuildScan<K, V, D, I>, u64)>
     where
-        I: Iterator<Item = Result<db::Entry<K, V, <V as Diff>::D>>>,
+        I: Iterator<Item = db::Entry<K, V, D>>,
+        D: Clone + IntoCbor,
     {
         let iter = Rc::new(RefCell::new(iter));
+
         let zz = build::BuildZZ::new(
             &self.config,
             Rc::clone(&self.iflush),
@@ -199,54 +218,46 @@ where
         Ok((Rc::try_unwrap(iter).ok().unwrap().into_inner(), root))
     }
 
-    fn build_flush(self) -> Result<(u64, u64)> {
-        let mut block = self.to_meta_blocks()?;
+    fn build_flush(self, bitmap: Vec<u8>) -> Result<(u64, u64)> {
+        let mut block = self.to_meta_blocks(bitmap)?;
         block.extend_from_slice(&(u64::try_from(block.len()).unwrap().to_be_bytes()));
 
         self.iflush.borrow_mut().flush(block)?;
 
-        let len1 = {
-            let iflush = Rc::try_unwrap(self.iflush).ok().unwrap();
-            let iflush = iflush.into_inner();
-            iflush.close()?
-        };
-        let len2 = {
-            let vflush = Rc::try_unwrap(self.vflush).ok().unwrap();
-            let vflush = vflush.into_inner();
-            vflush.close()?
-        };
+        let len1 = Rc::try_unwrap(self.iflush)
+            .ok()
+            .unwrap()
+            .into_inner()
+            .close()?;
+        let len2 = Rc::try_unwrap(self.vflush)
+            .ok()
+            .unwrap()
+            .into_inner()
+            .close()?;
 
         Ok((len1, len2))
     }
 
-    fn to_meta_blocks(&self) -> Result<Vec<u8>> {
-        let stats = util::to_cbor_bytes(self.stats.clone())?;
-
-        debug!(
-            target: "robt",
-            "{:?}, metablocks root:{} bitmap:{} meta:{}  stats:{}",
-            self.iflush.as_ref().borrow().to_file_path(), self.root, self.bitmap.len()?,
-            self.app_meta.len(), stats.len(),
-        );
+    fn to_meta_blocks(&self, bitmap: Vec<u8>) -> Result<Vec<u8>> {
+        let stats = util::into_cbor_bytes(self.stats.clone())?;
 
         let metas = vec![
             MetaItem::AppMetadata(self.app_meta.clone()),
             MetaItem::Stats(stats),
-            MetaItem::Bitmap(self.bitmap.to_vec()),
+            MetaItem::Bitmap(bitmap),
             MetaItem::Root(self.root),
             MetaItem::Marker(ROOT_MARKER.clone()),
         ];
 
-        let mut block = util::to_cbor_bytes(metas)?;
+        let mut block = util::into_cbor_bytes(metas)?;
         block.resize(Self::compute_root_block(block.len()), 0);
         Ok(block)
     }
 
     fn compute_root_block(n: usize) -> usize {
-        if (n % MARKER_BLOCK_SIZE) == 0 {
-            n
-        } else {
-            ((n / MARKER_BLOCK_SIZE) + 1) * MARKER_BLOCK_SIZE
+        match n % MARKER_BLOCK_SIZE {
+            0 => n,
+            _ => ((n / MARKER_BLOCK_SIZE) + 1) * MARKER_BLOCK_SIZE,
         }
     }
 }
@@ -276,61 +287,53 @@ impl MetaItem {
 }
 
 /// Index type, immutable, durable, fully-packed and lockless reads.
-pub struct Index<K, V, B, D = db::NoDiff> {
+pub struct Index<K, V, D, B> {
     dir: ffi::OsString,
     name: String,
 
+    reader: Reader<K, V, D>,
     metas: Arc<Vec<MetaItem>>,
     stats: Stats,
     bitmap: Arc<B>,
-
-    reader: Reader<K, V, D>,
-
-    _key: marker::PhantomData<K>,
-    _val: marker::PhantomData<V>,
 }
 
-impl<K, V, B, D> Index<K, V, B, D> {
-    pub fn open(dir: &ffi::OsStr, name: &str) -> Result<Index<K, V, B>>
-    where
-        B: Bloom,
-    {
-        let mut ifd = match find_index_file(dir, name) {
-            Some(ip) => err_at!(IOError, fs::OpenOptions::new().read(true).open(&ip))?,
-            None => err_at!(Invalid, msg: "bad file {:?}/{}", dir, name)?,
+impl<K, V, D, B> Index<K, V, D, B>
+where
+    K: FromCbor,
+    V: FromCbor,
+    D: FromCbor,
+    B: Bloom,
+{
+    pub fn open(dir: &ffi::OsStr, name: &str) -> Result<Index<K, V, D, B>> {
+        let mut index = match find_index_file(dir, name) {
+            Some(f) => err_at!(IOError, fs::OpenOptions::new().read(true).open(&f))?,
+            None => err_at!(Invalid, msg: "no index file {:?}/{}", dir, name)?,
         };
-        err_at!(IOError, ifd.lock_shared())?;
+        err_at!(IOError, index.lock_shared())?;
 
-        let metas = {
+        let metas: Vec<MetaItem> = {
             let n = {
                 let seek = io::SeekFrom::End(-8);
-                let data = read_file!(ifd, seek, 8, "reading meta-len from index")?;
+                let data = read_file!(index, seek, 8, "reading meta-len from index")?;
                 u64::from_be_bytes(data.try_into().unwrap())
             };
             let seek = io::SeekFrom::End(-8 - i64::try_from(n).unwrap());
-            let block = read_file!(ifd, seek, n, "reading meta-data from index")?;
-            Vec::<MetaItem>::from_cbor(Cbor::decode(&mut block.as_slice())?.0)?
+            let block = read_file!(index, seek, n, "reading meta-data from index")?;
+            util::from_cbor_bytes(&block)?.0
         };
 
-        let stats = match &metas[1] {
-            MetaItem::Stats(stats) => {
-                let (val, _) = Cbor::decode(&mut stats.as_slice())?;
-                Stats::from_cbor(val)?
-            }
+        let stats: Stats = match &metas[1] {
+            MetaItem::Stats(stats) => util::from_cbor_bytes(stats)?.0,
             _ => unreachable!(),
         };
 
         let bitmap = match &metas[2] {
-            MetaItem::Bitmap(data) => B::from_vec(&data)?,
+            MetaItem::Bitmap(data) => err_at!(Fatal, B::from_vec(&data))?,
             _ => unreachable!(),
         };
 
         let root = match &metas[3] {
-            MetaItem::Root(root) => {
-                let root = io::SeekFrom::Start(*root);
-                let block = read_file!(&mut ifd, root, stats.m_blocksize, "read block")?;
-                util::from_cbor_bytes::<Vec<Entry<K, V, D>>>(&block)?.0
-            }
+            MetaItem::Root(root) => *root,
             _ => unreachable!(),
         };
 
@@ -355,65 +358,61 @@ impl<K, V, B, D> Index<K, V, B, D> {
             false => None,
         };
 
-        let reader = Reader::from_root(&stats, root, ifd, vlog)?;
+        let reader = Reader::from_root(root, &stats, index, vlog)?;
 
         let val = Index {
             dir: dir.to_os_string(),
             name: name.to_string(),
 
+            reader,
             metas: Arc::new(metas),
             stats,
             bitmap: Arc::new(bitmap),
-
-            reader,
-
-            _key: marker::PhantomData,
-            _val: marker::PhantomData,
         };
 
         Ok(val)
     }
 
     pub fn clone(&self) -> Result<Self> {
-        //let index = match find_index_file(&self.dir, &self.name) {
-        //    Some(ip) => err_at!(IOError, fs::OpenOptions::new().read(true).open(&ip))?,
-        //    None => err_at!(Invalid, msg: "bad file {:?}/{}", &self.dir, &self.name)?,
-        //};
+        let index = match find_index_file(&self.dir, &self.name) {
+            Some(ip) => err_at!(IOError, fs::OpenOptions::new().read(true).open(&ip))?,
+            None => err_at!(Invalid, msg: "bad file {:?}/{}", &self.dir, &self.name)?,
+        };
 
-        //let vlog = match self.stats.value_in_vlog || self.stats.delta_ok {
-        //    true => {
-        //        let vlog_file = self.stats.vlog_file.as_ref();
-        //        let fnm = match vlog_file.map(|f| path::Path::new(f).file_name()) {
-        //            Some(Some(fnm)) => fnm.to_os_string(),
-        //            _ => ffi::OsString::from(VlogFileName::from(self.name.to_string())),
-        //        };
-        //        let vp: path::PathBuf = [self.dir.to_os_string(), fnm].iter().collect();
-        //        Some(err_at!(
-        //            IOError,
-        //            fs::OpenOptions::new().read(true).open(&vp)
-        //        )?)
-        //    }
-        //    false => None,
-        //};
+        let vlog = match self.stats.value_in_vlog || self.stats.delta_ok {
+            true => {
+                let vlog_file = self.stats.vlog_file.as_ref();
+                let fnm = match vlog_file.map(|f| path::Path::new(f).file_name()) {
+                    Some(Some(fnm)) => fnm.to_os_string(),
+                    _ => ffi::OsString::from(VlogFileName::from(self.name.to_string())),
+                };
+                let vp: path::PathBuf = [self.dir.to_os_string(), fnm].iter().collect();
+                Some(err_at!(
+                    IOError,
+                    fs::OpenOptions::new().read(true).open(&vp)
+                )?)
+            }
+            false => None,
+        };
 
-        //let val = Index {
-        //    dir: self.dir.clone(),
-        //    name: self.name.clone(),
+        let root = match &self.metas[3] {
+            MetaItem::Root(root) => *root,
+            _ => unreachable!(),
+        };
 
-        //    metas: Arc::clone(&self.metas),
-        //    stats: self.stats.clone(),
-        //    bitmap: Arc::clone(&self.bitmap),
+        let reader = Reader::from_root(root, &self.stats, index, vlog)?;
 
-        //    index,
-        //    vlog,
+        let val = Index {
+            dir: self.dir.clone(),
+            name: self.name.clone(),
 
-        //    _key: marker::PhantomData,
-        //    _val: marker::PhantomData,
-        //};
+            reader,
+            metas: Arc::clone(&self.metas),
+            stats: self.stats.clone(),
+            bitmap: Arc::clone(&self.bitmap),
+        };
 
-        //Ok(val)
-
-        todo!()
+        Ok(val)
     }
 
     pub fn compact(
@@ -421,13 +420,7 @@ impl<K, V, B, D> Index<K, V, B, D> {
         dir: &ffi::OsStr,
         name: &str,
         cutoff: db::Cutoff,
-    ) -> Result<Self>
-    where
-        K: Clone + Hash + FromCbor + IntoCbor,
-        V: Clone + Diff + FromCbor + IntoCbor,
-        <V as Diff>::D: FromCbor + IntoCbor,
-        B: Bloom,
-    {
+    ) -> Result<Self> {
         let config = {
             let mut config: Config = self.stats.clone().into();
             config.dir = dir.to_os_string();
@@ -437,10 +430,10 @@ impl<K, V, B, D> Index<K, V, B, D> {
 
         let builder = {
             let app_meta = self.to_app_metadata();
-            Builder::<K, V, B>::initial(config, app_meta)?
+            Builder::<K, V>::initial(config, app_meta)?
         };
         //let iter = CompactScan::new(self.iter::<<V as Diff>::D>()?, cutoff);
-        //builder.build_from_iter(iter)?;
+        //builder.from_iter(iter)?;
         let x = 10;
 
         Index::open(dir, name)
@@ -451,12 +444,10 @@ impl<K, V, B, D> Index<K, V, B, D> {
     }
 
     pub fn purge(self) -> Result<()> {
-        let index_file = to_index_file(&self.dir, &self.name);
-        purge_file(index_file)?;
+        purge_file(to_index_file(&self.dir, &self.name))?;
 
         if self.stats.value_in_vlog || self.stats.delta_ok {
-            let vlog_file = to_vlog_file(&self.dir, &self.name);
-            purge_file(vlog_file)?;
+            purge_file(to_vlog_file(&self.dir, &self.name))?;
         }
 
         Ok(())
@@ -467,7 +458,7 @@ impl<K, V, B, D> Index<K, V, B, D> {
     }
 }
 
-impl<K, V, B, D> Index<K, V, B, D> {
+impl<K, V, D, B> Index<K, V, D, B> {
     pub fn to_name(&self) -> String {
         self.name.clone()
     }
@@ -513,12 +504,14 @@ impl<K, V, B, D> Index<K, V, B, D> {
         usize::try_from(self.stats.n_count).unwrap()
     }
 
-    pub fn get<Q>(&mut self, _key: &Q) -> Result<db::Entry<K, V, D>>
+    pub fn get<Q>(&mut self, key: &Q) -> Result<db::Entry<K, V, D>>
     where
-        K: Borrow<Q>,
-        Q: Ord + ?Sized + Hash,
+        K: Clone + Borrow<Q> + FromCbor,
+        V: Clone + FromCbor,
+        D: Clone + FromCbor,
+        Q: Ord,
     {
-        todo!()
+        Ok(self.reader.get(key)?.into())
     }
 
     //pub fn range<R, Q, D>(&mut self, _range: R) -> Result<Iter<K, V, D>>
@@ -539,12 +532,12 @@ impl<K, V, B, D> Index<K, V, B, D> {
     //    todo!()
     //}
 
-    //pub fn iter<D>(&mut self) -> Result<Iter<K, V, D>>
-    //where
-    //    V: Diff,
-    //{
-    //    todo!()
-    //}
+    pub fn iter<D>(&mut self) -> Result<Iter<K, V, D>>
+    where
+        V: Diff,
+    {
+        todo!()
+    }
 
     pub fn validate(&mut self) -> Result<Stats>
     where
@@ -640,7 +633,7 @@ fn purge_file(file: ffi::OsString) -> Result<&'static str> {
             Ok("ok")
         }
         Err(_) => {
-            debug!(target: "robt", "locked file {:?}", file);
+            debug!(target: "robt", "unable to get exclusive lock for {:?}", file);
             Ok("locked")
         }
     }
