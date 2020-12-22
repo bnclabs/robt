@@ -2,9 +2,9 @@ use fs2::FileExt;
 use log::debug;
 use mkit::{
     self,
-    cbor::{Cbor, FromCbor, IntoCbor},
-    db::{self, BuildIndex, NoDiff},
-    traits::{Bloom, Diff},
+    cbor::{FromCbor, IntoCbor},
+    db::{self, BuildIndex},
+    traits::Bloom,
     Cborize,
 };
 
@@ -16,7 +16,7 @@ use std::{
     ffi, fmt, fs,
     hash::Hash,
     io, marker,
-    ops::RangeBounds,
+    ops::{Bound, RangeBounds},
     path,
     rc::Rc,
     sync::Arc,
@@ -25,11 +25,10 @@ use std::{
 use crate::{
     build,
     config::{Config, Stats},
-    entry::Entry,
     files::{IndexFileName, VlogFileName},
     flush::Flusher,
     marker::ROOT_MARKER,
-    reader::Reader,
+    reader::{Iter, Reader},
     scans::{BitmappedScan, BuildScan, CompactScan},
     util, Error, NoBitmap, Result,
 };
@@ -122,13 +121,13 @@ where
 {
     type Err = Error;
 
-    fn from_iter<I, D>(mut self, iter: I, bitmap: NoBitmap) -> Result<()>
+    fn from_iter<I, D>(mut self, iter: I, _: NoBitmap) -> Result<()>
     where
         I: Iterator<Item = db::Entry<K, V, D>>,
         D: Clone + IntoCbor,
     {
         let iter = BuildScan::new(iter, 0 /*seqno*/);
-        let iter = self.build_from_iter(iter)?;
+        let _iter = self.build_from_iter(iter)?;
         self.build_flush(vec![] /*bitmap*/)?;
 
         Ok(())
@@ -420,7 +419,12 @@ where
         dir: &ffi::OsStr,
         name: &str,
         cutoff: db::Cutoff,
-    ) -> Result<Self> {
+    ) -> Result<Self>
+    where
+        K: Clone + Ord + Hash + FromCbor + IntoCbor,
+        V: Clone + FromCbor + IntoCbor,
+        D: Clone + FromCbor + IntoCbor,
+    {
         let config = {
             let mut config: Config = self.stats.clone().into();
             config.dir = dir.to_os_string();
@@ -432,9 +436,9 @@ where
             let app_meta = self.to_app_metadata();
             Builder::<K, V>::initial(config, app_meta)?
         };
-        //let iter = CompactScan::new(self.iter::<<V as Diff>::D>()?, cutoff);
-        //builder.from_iter(iter)?;
-        let x = 10;
+        let r = (Bound::<K>::Unbounded, Bound::<K>::Unbounded);
+        let iter = CompactScan::new(self.iter(r)?.map(|e| e.unwrap()), cutoff);
+        <Builder<K, V> as BuildIndex<K, V, B>>::from_iter(builder, iter, B::default())?;
 
         Index::open(dir, name)
     }
@@ -514,77 +518,99 @@ impl<K, V, D, B> Index<K, V, D, B> {
         Ok(self.reader.get(key)?.into())
     }
 
-    //pub fn range<R, Q, D>(&mut self, _range: R) -> Result<Iter<K, V, D>>
-    //where
-    //    K: Borrow<Q>,
-    //    R: RangeBounds<Q>,
-    //    Q: Ord + ?Sized,
-    //{
-    //    todo!()
-    //}
-
-    //pub fn reverse<R, Q, D>(&mut self, _range: R) -> Result<Iter<K, V, D>>
-    //where
-    //    K: Borrow<Q>,
-    //    R: RangeBounds<Q>,
-    //    Q: Ord + ?Sized,
-    //{
-    //    todo!()
-    //}
-
-    pub fn iter<D>(&mut self) -> Result<Iter<K, V, D>>
+    pub fn iter<Q, R>(&mut self, range: R) -> Result<Iter<K, V, D>>
     where
-        V: Diff,
+        K: Clone + Borrow<Q> + FromCbor,
+        V: Clone + FromCbor,
+        D: Clone + FromCbor,
+        Q: Ord + ToOwned<Owned = K>,
+        R: RangeBounds<Q>,
     {
-        todo!()
+        let (reverse, versions) = (false, false);
+        self.reader.iter(range, reverse, versions)
+    }
+
+    pub fn reverse<Q, R>(&mut self, range: R) -> Result<Iter<K, V, D>>
+    where
+        K: Clone + Borrow<Q> + FromCbor,
+        V: Clone + FromCbor,
+        D: Clone + FromCbor,
+        Q: Ord + ToOwned<Owned = K>,
+        R: RangeBounds<Q>,
+    {
+        let (reverse, versions) = (true, false);
+        self.reader.iter(range, reverse, versions)
+    }
+
+    pub fn iter_versions<Q, R>(&mut self, range: R) -> Result<Iter<K, V, D>>
+    where
+        K: Clone + Borrow<Q> + FromCbor,
+        V: Clone + FromCbor,
+        D: Clone + FromCbor,
+        Q: Ord + ToOwned<Owned = K>,
+        R: RangeBounds<Q>,
+    {
+        let (reverse, versions) = (false, true);
+        self.reader.iter(range, reverse, versions)
+    }
+
+    pub fn reverse_versions<Q, R>(&mut self, range: R) -> Result<Iter<K, V, D>>
+    where
+        K: Clone + Borrow<Q> + FromCbor,
+        V: Clone + FromCbor,
+        D: Clone + FromCbor,
+        Q: Ord + ToOwned<Owned = K>,
+        R: RangeBounds<Q>,
+    {
+        let (reverse, versions) = (true, true);
+        self.reader.iter(range, reverse, versions)
     }
 
     pub fn validate(&mut self) -> Result<Stats>
     where
-        K: Clone + fmt::Debug + PartialOrd + FromCbor,
-        V: Diff + FromCbor,
-        <V as Diff>::D: FromCbor,
+        K: Clone + PartialOrd + Ord + fmt::Debug + FromCbor,
+        V: Clone + FromCbor,
+        D: Clone + FromCbor,
     {
-        //let iter = self.iter::<<V as Diff>::D>()?;
+        let iter = self.iter((Bound::<K>::Unbounded, Bound::<K>::Unbounded))?;
 
-        //let mut prev_key: Option<K> = None;
-        //let (mut n_count, mut n_deleted, mut seqno) = (0, 0, 0);
+        let mut prev_key: Option<K> = None;
+        let (mut n_count, mut n_deleted, mut seqno) = (0, 0, 0);
 
-        //for entry in iter {
-        //    let entry = entry?;
-        //    n_count += 1;
+        for entry in iter {
+            let entry = entry?;
+            n_count += 1;
 
-        //    if entry.is_deleted() {
-        //        n_deleted += 1;
-        //    }
+            if entry.is_deleted() {
+                n_deleted += 1;
+            }
 
-        //    seqno = cmp::max(seqno, entry.to_seqno());
+            seqno = cmp::max(seqno, entry.to_seqno());
 
-        //    match prev_key.as_ref().map(|pk| pk.lt(&entry.key)) {
-        //        Some(true) | None => (),
-        //        Some(false) => err_at!(Fatal, msg: "{:?} >= {:?}", prev_key, entry.key)?,
-        //    }
+            match prev_key.as_ref().map(|pk| pk.lt(&entry.key)) {
+                Some(true) | None => (),
+                Some(false) => err_at!(Fatal, msg: "{:?} >= {:?}", prev_key, entry.key)?,
+            }
 
-        //    for d in entry.deltas.iter() {
-        //        if d.to_seqno() >= seqno {
-        //            err_at!(Fatal, msg: "delta is newer {} {}", d.to_seqno(), seqno)?;
-        //        }
-        //    }
+            for d in entry.deltas.iter() {
+                if d.to_seqno() >= seqno {
+                    err_at!(Fatal, msg: "delta is newer {} {}", d.to_seqno(), seqno)?;
+                }
+            }
 
-        //    prev_key.get_or_insert_with(|| entry.key.clone());
-        //}
+            prev_key.get_or_insert_with(|| entry.key.clone());
+        }
 
-        //let s = self.to_stats();
-        //if n_count != s.n_count {
-        //    err_at!(Fatal, msg: "validate, n_count {} > {}", n_count, s.n_count)
-        //} else if n_deleted != s.n_deleted {
-        //    err_at!(Fatal, msg: "validate, n_deleted {} > {}", n_deleted, s.n_deleted)
-        //} else if seqno > 0 && seqno > s.seqno {
-        //    err_at!(Fatal, msg: "validate, seqno {} > {}", seqno, s.seqno)
-        //} else {
-        //    Ok(s)
-        //}
-        todo!()
+        let s = self.to_stats();
+        if n_count != s.n_count {
+            err_at!(Fatal, msg: "validate, n_count {} > {}", n_count, s.n_count)
+        } else if n_deleted != s.n_deleted {
+            err_at!(Fatal, msg: "validate, n_deleted {} > {}", n_deleted, s.n_deleted)
+        } else if seqno > 0 && seqno > s.seqno {
+            err_at!(Fatal, msg: "validate, seqno {} > {}", seqno, s.seqno)
+        } else {
+            Ok(s)
+        }
     }
 }
 
