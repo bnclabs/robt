@@ -13,6 +13,8 @@ pub const VBLOCKSIZE: usize = 4 * 1024; // 4KB of blobs.
 /// index blocks.
 pub const FLUSH_QUEUE_SIZE: usize = 64;
 
+const STATS_VER1: u32 = 0x0001;
+
 /// Configuration for Read Only BTree index, configuration type is used
 /// only build an index. Subsequently configuration parameters are
 /// persisted along with the index.
@@ -125,7 +127,7 @@ pub struct Stats {
 }
 
 impl Stats {
-    const ID: u32 = 0x0;
+    const ID: u32 = STATS_VER1;
 }
 
 impl From<Stats> for Config {

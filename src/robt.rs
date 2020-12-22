@@ -285,7 +285,7 @@ pub enum MetaItem {
 }
 
 impl MetaItem {
-    const ID: u32 = 0x0;
+    const ID: &'static str = "robt/metaitem/0.0.1";
 }
 
 /// Index type, immutable, durable, fully-packed and lockless reads.
