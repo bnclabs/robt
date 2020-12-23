@@ -15,9 +15,10 @@ pub const FLUSH_QUEUE_SIZE: usize = 64;
 
 const STATS_VER1: u32 = 0x0001;
 
-/// Configuration for Read Only BTree index, configuration type is used
-/// only build an index. Subsequently configuration parameters are
-/// persisted along with the index.
+/// Configuration for Read Only BTree index.
+///
+/// Configuration type is used only for building an index. Subsequently,
+/// configuration parameters are persisted along with the index.
 #[derive(Clone)]
 pub struct Config {
     /// location path where index files are created.
@@ -25,14 +26,13 @@ pub struct Config {
     /// name of the index.
     pub name: String,
     /// Leaf block size in btree index.
-    /// Default: Config::ZBLOCKSIZE
+    /// Default: [ZBLOCKSIZE]
     pub z_blocksize: usize,
     /// Intermediate block size in btree index.
-    /// Default: Config::MBLOCKSIZE
+    /// Default: [MBLOCKSIZE]
     pub m_blocksize: usize,
-    /// If deltas are indexed and/or value to be stored in separate log
-    /// file.
-    /// Default: Config::VBLOCKSIZE
+    /// If deltas are indexed and/or value to be stored in separate log file.
+    /// Default: [VBLOCKSIZE]
     pub v_blocksize: usize,
     /// Include delta as part of entry. Note that delta values are always
     /// stored in separate value-log file.
@@ -42,7 +42,7 @@ pub struct Config {
     /// value log file. Otherwise value shall be saved in the index's
     /// leaf node. Default: false
     pub value_in_vlog: bool,
-    /// Flush queue size. Default: Config::FLUSH_QUEUE_SIZE
+    /// Flush queue size. Default: [FLUSH_QUEUE_SIZE]
     pub flush_queue_size: usize,
 }
 
@@ -62,7 +62,7 @@ impl Config {
         }
     }
 
-    /// Configure differt set of block size for leaf-node, intermediate-node.
+    /// Configure block size for leaf-node, intermediate-node, and value-log
     pub fn set_blocksize(&mut self, z: usize, v: usize, m: usize) -> &mut Self {
         self.z_blocksize = z;
         self.v_blocksize = v;
@@ -70,14 +70,15 @@ impl Config {
         self
     }
 
-    /// Enable delta persistence, and configure value-log-file.
+    /// Enable delta persistence. If `delta_ok` is false, older versions of value
+    /// shall be ignored.
     pub fn set_delta(&mut self, delta_ok: bool) -> &mut Self {
         self.delta_ok = delta_ok;
         self
     }
 
     /// Persist values in a separate file, called value-log file. To persist
-    /// values along with leaf node, pass `ok` as false.
+    /// values along with leaf node, pass `value_log` as false.
     pub fn set_value_log(&mut self, value_log: bool) -> &mut Self {
         self.value_in_vlog = value_log;
         self
@@ -115,14 +116,14 @@ pub struct Stats {
     pub n_deleted: usize,
     /// Sequence number for the latest entry.
     pub seqno: u64,
-    /// Older size of value-log file, applicable only in compaction.
+    /// Older size of value-log file, applicable only in incremental build.
     pub n_abytes: u64,
     /// Number of entries in bitmap.
     pub n_bitmap: usize,
 
-    /// Time take to build this btree.
+    /// Time taken to build this btree.
     pub build_time: u64,
-    /// Timestamp when this index was build, from UNIX EPOCH, in secs.
+    /// Timestamp when this index was built, from UNIX EPOCH, in secs.
     pub epoch: u64,
 }
 

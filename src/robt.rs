@@ -36,6 +36,9 @@ use crate::{
 /// Marker block size, not to be tampered with.
 const MARKER_BLOCK_SIZE: usize = 1024 * 4;
 
+/// Build an immutable read-only btree index from an iterator.
+///
+/// Refer to package documentation for typical work-flow.
 pub struct Builder<K, V, D> {
     // configuration
     config: Config,
@@ -53,6 +56,8 @@ pub struct Builder<K, V, D> {
 }
 
 impl<K, V, D> Builder<K, V, D> {
+    /// Build a fresh index, using configuration and snapshot specific
+    /// meta-data.
     pub fn initial(c: Config, app_meta: Vec<u8>) -> Result<Self> {
         let queue_size = c.flush_queue_size;
         let iflush = {
@@ -83,18 +88,21 @@ impl<K, V, D> Builder<K, V, D> {
         Ok(val)
     }
 
-    pub fn incremental(
-        c: Config,
-        vlog_file: ffi::OsString,
-        app_meta: Vec<u8>,
-    ) -> Result<Self> {
+    /// Build an incremental index on top of an existing index. Note
+    /// that the entire btree along with root-node, intermediate-nodes
+    /// and leaf-nodes shall be built fresh from the iterator, but entries
+    /// form the iterator can hold reference, as `{fpos, length}` to values
+    /// and deltas within a value-log file. Instead of creating a fresh
+    /// value-log file, incremental build will serialize values and deltas
+    /// into supplied `vlog` file in append only fashion.
+    pub fn incremental(c: Config, vlog: ffi::OsString, meta: Vec<u8>) -> Result<Self> {
         let queue_size = c.flush_queue_size;
         let iflush = {
             let file_path = to_index_file(&c.dir, &c.name);
             Rc::new(RefCell::new(Flusher::new(&file_path, true, queue_size)?))
         };
         let vflush = if c.value_in_vlog || c.delta_ok {
-            Rc::new(RefCell::new(Flusher::new(&vlog_file, true, queue_size)?))
+            Rc::new(RefCell::new(Flusher::new(&vlog, true, queue_size)?))
         } else {
             Rc::new(RefCell::new(Flusher::empty()))
         };
@@ -104,7 +112,7 @@ impl<K, V, D> Builder<K, V, D> {
             iflush,
             vflush,
 
-            app_meta,
+            app_meta: meta,
             stats: Stats::default(),
             root: u64::default(),
 
