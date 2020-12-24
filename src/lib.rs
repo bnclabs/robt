@@ -2,13 +2,14 @@
 //!
 //! Use [Builder] type to build a new index. And subsequently load the
 //! index using the [Index] type. Index can be concurrently accessed by
-//! cloning the `Index` type. Note that a single Index instance cannot be
+//! cloning the `Index` instance. Note that a single Index instance cannot be
 //! shared among threads. Once an index is built using the `Builder` type
-//! it is not possible to modify them. While strict immutablility might
-//! seem like an inconvinience, they have certain advantages,
+//! it is not possible to modify them. While strict immutability might
+//! seem like an inconvenience, they have certain advantages,
 //!
 //! * They are fully packed and hence less overhead and lesser tree depth.
 //! * Easy and efficient caching of btree-blocks.
+//! * Can be easily paired with immutable read-only bloom filters.
 //!
 //! **Inventory of features**
 //!
@@ -52,6 +53,12 @@
 //! // use one or more set_ method to configure the btree parameters.
 //! let builder = Build::initial(config, app_meta);
 //! builder.from_iter(iter, NoBitmap);
+//!
+//! // Subsequently open an index as,
+//! let reader1 = Index::open("/opt/data", "movies").expect("fail");
+//! // create another concurrent reader
+//! let reader2 = reader.clone();
+//! let handle = thread::spawn(|| reader2);
 //! ```
 //!
 //! Let us look at the steps one by one:
@@ -66,7 +73,7 @@
 //! * Caller can optionally pass a bitmap instance that shall be used
 //!   for implementing a [bloom filter][bloom-filter].
 //! * Bitmap type is parametrized via the `BuildIndex` trait. If
-//!   probablistic bitmap table is not required, pass `NoBitmap` value
+//!   probabilistic bitmap table is not required, pass `NoBitmap` value
 //!   to `from_iter()` method.
 //!
 //! In the example above, we are using `initial()` constructor to create
@@ -78,11 +85,11 @@
 //! `intermediate-node` (called m-block) and `leaf-node` (called z-block).
 //! The entire dataset is maintained in the leaf node and the intermediate
 //! nodes are constructed in bottoms-up fashion using the first-key in the
-//! leaf-node, all the way up to the root-node. The shape and behaviour of
+//! leaf-node, all the way up to the root-node. The shape and behavior of
 //! root-node is exactly same as the `intermediate-node`.
 //!
-//! The dataset is made up of entries and each entires is made up of key,
-//! value, seqno, a flag to denoted wether the node was deleted or upserted.
+//! The dataset is made up of entries and each entries is made up of key,
+//! value, seqno, a flag to denoted whether the node was deleted or upserted.
 //! Reason for maintaining seqno, and deleted-flag is to support database
 //! features like vector-timestamping, log-structured-merge etc..
 //!
@@ -97,7 +104,7 @@
 //! entry and persisted.
 //!
 //! Each entry in the index is defined as Entry<K, V, D> type and defined
-//! in a common crate. Note that an index entry is parametrised over
+//! in a common crate. Note that an index entry is parametrized over
 //! key-type, value-type, and delta-type. Here delta-type `D` can be
 //! `NoDiff` if application is not interested in preserving older-versions
 //! or should be same as `<V as Diff>::D`. Refer to [Diff] mechanics for
@@ -105,7 +112,7 @@
 //!
 //! Now coming back to the leaf-node, all entries are stored in the
 //! leaf-node. And to facilitate archival of older versions `deltas`
-//! are persisted in a seperate value-log file. And optionally, to
+//! are persisted in a separate value-log file. And optionally, to
 //! facilitate incremental build, value can also be persisted in the
 //! value-log file. When both values and deltas are persisted in a
 //! separate value-log file, leaf nodes become very compact and ends
@@ -114,39 +121,69 @@
 //!
 //! **Reading from index**
 //!
+//! All read operations are done via [Index] type. Use the same arguments
+//! passed to `initial()` or `incremental()` constructors to `open()` an
+//! existing index for reading.
+//!
+//! _Cloning an index for concurrency_. Though applications can use the
+//! `open()` call to create as many needed instance of an Index, the
+//! recommended approach is to call `try_clone()` on Index. This will share
+//! the underlying data-structure to avoid memory bloat across several
+//! instance of same Index. Only meta-data is shared across index instance
+//! (when it is cloned), every index instance will keep an open
+//! file-descriptor for underlying file(s).
+//!
 //! **Simple Key-Value index**
 //!
+//! `robt` indexes are parametrized over key-type, value-type, delta-type,
+//! and bitmap-type. `delta-type` implement the older versions of value-type
+//! as delta-difference. `bitmap-type` implement bloom filter to optimize
+//! away missing-lookups.
+//!
+//! In most cases, `delta-type` and `bitmap-type` are not needed. To build
+//! and use simple `{key,value}` index [Builder] and [Index] type in the
+//! crate-root can be used. To use fully parameterized variant, use
+//! [db::Builder] and [db::Index] types.
+//!
 //! **Index Entry**
+//!
+//! For simple indexing, `key` and `value` are enough. But to implement
+//! database-features like compaction, log-structured-merge we need to
+//! preserve more information about each entry. While the internal shape of
+//! entry is not exposed (for future compatibility), `robt` uses
+//! [mkit::db::Entry] as the default index-entry.
 //!
 //! **Compaction**
 //!
 //! Compaction is the process of de-duplicating/removing entries
-//! and/or entry-versions from an index instance. In `robt` there
-//! are three types of compaction.
+//! and/or older-versions from an index snapshots (aka instance). In `robt`
+//! there are three types of compaction. The nature of compaction is captured
+//! in the [mkit::db::Cutoff] type.
 //!
 //! _deduplication_
 //!
-//! When same value-log file is used to incrementally build newer
-//! batch of mutations older values gets duplicated. This requires
-//! a periodic clean up of garbage values to reduce disk foot-print.
+//! This is basically applicable for snapshots that don't have to preserve
+//! older versions or deleted entries.
 //!
-//! _mono-compaction_
+//! When same value-log file is used to incrementally build newer batch of
+//! mutations older values gets duplicated. This requires a periodic clean up
+//! of garbage values to reduce disk foot-print.
 //!
-//! This is applicable for index instances that do not need distributed
-//! LSM. In such cases, the oldest-level's snapshot can compact away older
-//! versions of each entry and purge entries that are marked deleted.
+//! This is type of compaction is also applicable for index instances that
+//! do not need distributed [LSM]. In such cases, the oldest-level's snapshot
+//! can compact away older versions of each entry and purge entries that are
+//! marked deleted.
 //!
 //! _lsm-compaction_
 //!
-//! Robt, unlike other lsm-based-storage, can have the entire index
-//! as LSM for distributed database designs. To be more precise, in lsm
-//! mode, even the root level that holds the entire dataset can retain
-//! older versions. With this feature it is possible to design secondary
-//! indexes, network distribution and other features like `backup` and
-//! `archival` ensuring consistency. This also means the index footprint
-//! will indefinitely accumulate older versions. With limited disk space,
-//! it is upto the application logic to issue `lsm-compaction` when
-//! it is safe to purge entries/versions that are older than certain seqno.
+//! This is applicable for database index that store their index as multi-level
+//! snapshots, similar to [leveldb][leveldb]. Each snapshot can be built as
+//! `robt` [Index]. Most of the lsm-based-storage will have their root snapshot
+//! as the oldest and only source of truth, but this is not possible for
+//! distributed index that ends up with multiple truths across different nodes.
+//! To facilitate such designs, in lsm mode, even the root level at any given
+//! node, can retain older versions upto a specified `seqno`, that `seqno` is
+//! computed through eventual consistency.
 //!
 //! _tombstone-compaction_
 //!
@@ -156,9 +193,11 @@
 //!
 //! [bloom-filter]: https://en.wikipedia.org/wiki/Bloom_filter
 //! [cbor]: https://en.wikipedia.org/wiki/CBOR
+//! [LSM]: https://en.wikipedia.org/wiki/Log-structured_merge-tree
+//! [leveldb]: https://en.wikipedia.org/wiki/LevelDB
 
 #[allow(unused_imports)]
-use mkit::traits::Diff;
+use mkit::data::Diff;
 
 use std::{error, fmt, result};
 
@@ -265,12 +304,21 @@ mod scans;
 mod util;
 mod vlog;
 
-/// Place holder type to skip bloom filter for robt index.
+/// Place holder type to skip bloom filter while building index.
 #[derive(Clone)]
 pub struct NoBitmap;
 
 pub use config::{Config, Stats, FLUSH_QUEUE_SIZE, MBLOCKSIZE, VBLOCKSIZE, ZBLOCKSIZE};
-pub use robt::{Builder, Index};
+/// Module implement [Builder] and [Index] type parametrised over
+/// delta-type and bitmap-type.
+pub mod db {
+    pub use crate::robt::{Builder, Index};
+}
+
+/// Type alias for [db::Builder] without version control for value-type.
+pub type Builder<K, V> = db::Builder<K, V, mkit::db::NoDiff>;
+/// Type alias for [db::Index] without version control and bitmap.
+pub type Index<K, V> = db::Index<K, V, mkit::db::NoDiff, NoBitmap>;
 
 /// Type alias for Result return type, used by this package.
 pub type Result<T> = result::Result<T, Error>;

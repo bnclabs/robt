@@ -1,4 +1,7 @@
-use mkit::{self, db, traits::Bloom};
+use mkit::{
+    self,
+    db::{self, Bloom},
+};
 
 use std::{cmp, convert::TryFrom, hash, marker, time};
 
@@ -163,10 +166,11 @@ where
     fn next(&mut self) -> Option<Self::Item> {
         loop {
             match self.iter.next() {
-                Some(entry) => match entry.purge(self.cutoff) {
-                    Some(entry) => break Some(entry),
-                    None => (),
-                },
+                Some(entry) => {
+                    if let Some(entry) = entry.purge(self.cutoff) {
+                        break Some(entry);
+                    }
+                }
                 None => break None,
             }
         }

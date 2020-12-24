@@ -3,8 +3,8 @@ use log::debug;
 use mkit::{
     self,
     cbor::{FromCbor, IntoCbor},
+    db::Bloom,
     db::{self, BuildIndex},
-    traits::Bloom,
     Cborize,
 };
 
@@ -133,7 +133,7 @@ where
 {
     type Err = Error;
 
-    fn from_iter<I>(mut self, iter: I, _: NoBitmap) -> Result<()>
+    fn build_index<I>(&mut self, iter: I, _: NoBitmap) -> Result<()>
     where
         I: Iterator<Item = db::Entry<K, V, D>>,
     {
@@ -154,7 +154,7 @@ where
 {
     type Err = Error;
 
-    fn from_iter<I>(mut self, iter: I, bitmap: B) -> Result<()>
+    fn build_index<I>(&mut self, iter: I, bitmap: B) -> Result<()>
     where
         I: Iterator<Item = db::Entry<K, V, D>>,
     {
@@ -221,29 +221,21 @@ where
 
         let root = match build.next() {
             Some(Ok((_, root))) => root,
-            Some(Err(err)) => Err(err)?,
+            Some(Err(err)) => return Err(err),
             None => err_at!(Invalid, msg: "empty iterator")?,
         };
 
         Ok((Rc::try_unwrap(iter).ok().unwrap().into_inner(), root))
     }
 
-    fn build_flush(self, bitmap: Vec<u8>) -> Result<(u64, u64)> {
+    fn build_flush(&mut self, bitmap: Vec<u8>) -> Result<(u64, u64)> {
         let mut block = self.to_meta_blocks(bitmap)?;
         block.extend_from_slice(&(u64::try_from(block.len()).unwrap().to_be_bytes()));
 
         self.iflush.borrow_mut().flush(block)?;
 
-        let len1 = Rc::try_unwrap(self.iflush)
-            .ok()
-            .unwrap()
-            .into_inner()
-            .close()?;
-        let len2 = Rc::try_unwrap(self.vflush)
-            .ok()
-            .unwrap()
-            .into_inner()
-            .close()?;
+        let len1 = self.iflush.borrow_mut().close()?;
+        let len2 = self.vflush.borrow_mut().close()?;
 
         Ok((len1, len2))
     }
@@ -314,6 +306,7 @@ where
     D: FromCbor,
     B: Bloom,
 {
+    /// Open an existing index for read-only.
     pub fn open(dir: &ffi::OsStr, name: &str) -> Result<Index<K, V, D, B>> {
         let mut index = match find_index_file(dir, name) {
             Some(f) => err_at!(IOError, fs::OpenOptions::new().read(true).open(&f))?,
@@ -383,7 +376,15 @@ where
         Ok(val)
     }
 
-    pub fn clone(&self) -> Result<Self> {
+    /// Optionally set a different bitmap over this index. Know what you are
+    /// doing before calling this API.
+    pub fn set_bitmap(&mut self, bitmap: B) {
+        self.bitmap = Arc::new(bitmap)
+    }
+
+    /// Clone this index instance, with its underlying meta-data shared.
+    /// Note that file-descriptors are not shared.
+    pub fn try_clone(&self) -> Result<Self> {
         let index = match find_index_file(&self.dir, &self.name) {
             Some(ip) => err_at!(IOError, fs::OpenOptions::new().read(true).open(&ip))?,
             None => err_at!(Invalid, msg: "bad file {:?}/{}", &self.dir, &self.name)?,
@@ -425,6 +426,9 @@ where
         Ok(val)
     }
 
+    /// Compact this index into a new index specified by `name`, under `dir`.
+    /// `bitmap` argument carry same meaning as that of `build_index` method.
+    /// Refer to package documentation to know more about `Cutoff`.
     pub fn compact(
         mut self,
         dir: &ffi::OsStr,
@@ -444,21 +448,28 @@ where
             config
         };
 
-        let builder = {
+        let mut builder = {
             let app_meta = self.to_app_metadata();
             Builder::<K, V, D>::initial(config, app_meta)?
         };
         let r = (Bound::<K>::Unbounded, Bound::<K>::Unbounded);
         let iter = CompactScan::new(self.iter(r)?.map(|e| e.unwrap()), cutoff);
-        <Builder<K, V, D> as BuildIndex<K, V, D, B>>::from_iter(builder, iter, bitmap)?;
+        <Builder<K, V, D> as BuildIndex<K, V, D, B>>::build_index(
+            &mut builder,
+            iter,
+            bitmap,
+        )?;
 
         Index::open(dir, name)
     }
 
+    /// Close this index, releasing OS resources. To purge, call `purge()`
+    /// method.
     pub fn close(self) -> Result<()> {
         Ok(())
     }
 
+    /// Purge this index from disk.
     pub fn purge(self) -> Result<()> {
         purge_file(to_index_file(&self.dir, &self.name))?;
 
@@ -467,10 +478,6 @@ where
         }
 
         Ok(())
-    }
-
-    pub fn set_bitmap(&mut self, bitmap: B) {
-        self.bitmap = Arc::new(bitmap)
     }
 }
 
@@ -509,15 +516,15 @@ impl<K, V, D, B> Index<K, V, D, B> {
     }
 
     pub fn is_compacted(&self) -> bool {
-        if self.stats.n_abytes == 0 {
-            true
-        } else {
-            false
-        }
+        self.stats.n_abytes == 0
     }
 
     pub fn len(&self) -> usize {
         usize::try_from(self.stats.n_count).unwrap()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
     }
 
     pub fn get<Q>(&mut self, key: &Q) -> Result<db::Entry<K, V, D>>
@@ -630,13 +637,9 @@ fn find_index_file(dir: &ffi::OsStr, name: &str) -> Option<ffi::OsString> {
     let iter = fs::read_dir(dir).ok()?;
     let entry = iter
         .filter_map(|entry| entry.ok())
-        .filter_map(
-            |entry| match String::try_from(IndexFileName(entry.file_name())) {
-                Ok(nm) if nm == name => Some(entry),
-                _ => None,
-            },
-        )
-        .next();
+        .find(
+            |entry| matches!(String::try_from(IndexFileName(entry.file_name())), Ok(nm) if nm == name)
+        );
 
     entry.map(|entry| entry.file_name())
 }

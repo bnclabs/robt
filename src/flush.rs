@@ -72,8 +72,8 @@ impl Flusher {
         Ok(())
     }
 
-    pub fn close(mut self) -> Result<u64> {
-        match &mut self {
+    pub fn close(&mut self) -> Result<u64> {
+        match self {
             Flusher::File { tx, th, .. } => {
                 mem::drop(tx.take());
                 th.take().unwrap().join()?
