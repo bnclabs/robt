@@ -10,11 +10,12 @@
 //! * They are fully packed and hence less overhead and lesser tree depth.
 //! * Easy and efficient caching of btree-blocks.
 //! * Can be easily paired with immutable read-only bloom filters.
+//! * Friendly for concurrent access.
 //!
 //! **Inventory of features**
 //!
 //! * Index can be parametrized over Key-type and Value-type.
-//! * Uses [Cbor][cbor] for serialization and deserialization.
+//! * Uses [CBOR][cbor] for serialization and deserialization.
 //! * Key and Value types can be made `robt` compliant by `derive(Cborize)`.
 //! * Value can either be stored in leaf-node or in a separate log-file.
 //! * Additionally, incoming iterator, to build index, can supply older
