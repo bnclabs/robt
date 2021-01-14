@@ -1,15 +1,15 @@
 use mkit::{
-    cbor::{self, Cbor, IntoCbor},
+    cbor::{self, Cbor, FromCbor, IntoCbor},
     db, Cborize,
 };
 
-use std::{borrow::Borrow, convert::TryFrom};
+use std::{borrow::Borrow, convert::TryFrom, io};
 
 use crate::{util, vlog, Error, Result};
 
 const ENTRY_VER1: u32 = 0x0001;
 
-#[derive(Clone, Cborize)]
+#[derive(Clone, Debug, Eq, PartialEq, Cborize)]
 pub enum Entry<K, V, D> {
     MM {
         key: K,
@@ -62,16 +62,16 @@ impl<K, V, D> Entry<K, V, D> {
     }
 }
 
-impl<K, V, D> Entry<K, V, D>
-where
-    K: IntoCbor,
-    V: IntoCbor,
-    D: IntoCbor,
-{
-    pub fn into_reference(self, mut vfpos: u64, vlog: bool) -> Result<(Self, Vec<u8>)> {
+impl<K, V, D> Entry<K, V, D> {
+    // serialize into value-block and return the same.
+    pub fn into_reference(self, mut vfpos: u64, vlog: bool) -> Result<(Self, Vec<u8>)>
+    where
+        V: IntoCbor,
+        D: IntoCbor,
+    {
         match self {
-            val @ Entry::MM { .. } => Ok((val, vec![])),
-            val @ Entry::MZ { .. } => Ok((val, vec![])),
+            Entry::MM { .. } => Ok((self, vec![])),
+            Entry::MZ { .. } => Ok((self, vec![])),
             Entry::ZZ { key, value, deltas } => {
                 let (value, mut vblock) = if vlog {
                     value.into_reference(vfpos)?
@@ -101,6 +101,41 @@ where
                 };
 
                 Ok((entry, vblock))
+            }
+        }
+    }
+
+    pub fn into_native<F>(self, f: &mut F, versions: bool) -> Result<Self>
+    where
+        V: FromCbor,
+        D: FromCbor,
+        F: io::Seek + io::Read,
+    {
+        match self {
+            Entry::MM { .. } => Ok(self),
+            Entry::MZ { .. } => Ok(self),
+            Entry::ZZ { key, value, deltas } if versions => {
+                let value = value.into_native(f)?;
+                let mut native_deltas = vec![];
+                for delta in deltas.into_iter() {
+                    native_deltas.push(delta.into_native(f)?);
+                }
+
+                let entry = Entry::ZZ {
+                    key,
+                    value,
+                    deltas: native_deltas,
+                };
+
+                Ok(entry)
+            }
+            Entry::ZZ { key, value, .. } => {
+                let value = value.into_native(f)?;
+                Ok(Entry::ZZ {
+                    key,
+                    value,
+                    deltas: Vec::default(),
+                })
             }
         }
     }
@@ -146,6 +181,6 @@ impl<K, V, D> Entry<K, V, D> {
     }
 }
 
-//#[cfg(test)]
-//#[path = "entry_test.rs"]
-//mod entry_test;
+#[cfg(test)]
+#[path = "entry_test.rs"]
+mod entry_test;

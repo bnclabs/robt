@@ -28,7 +28,7 @@ impl TryFrom<IndexFileName> for String {
         }();
 
         match fname {
-            Some(fname) => Ok(fname.strip_suffix("-robt.indx").unwrap().to_string()),
+            Some(fname) => Ok(fname.strip_suffix("-robt").unwrap().to_string()),
             None => err_at!(InvalidFile, msg: "{:?}", ffpp),
         }
     }
@@ -82,7 +82,7 @@ impl TryFrom<VlogFileName> for String {
         }();
 
         match fname {
-            Some(fname) => Ok(fname.strip_suffix("-robt.vlog").unwrap().to_string()),
+            Some(fname) => Ok(fname.strip_suffix("-robt").unwrap().to_string()),
             None => err_at!(InvalidFile, msg: "{:?}", ffpp),
         }
     }
@@ -96,3 +96,7 @@ impl fmt::Display for VlogFileName {
         }
     }
 }
+
+#[cfg(test)]
+#[path = "files_test.rs"]
+mod files_test;

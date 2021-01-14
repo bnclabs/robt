@@ -278,22 +278,9 @@ impl<'a, K, V, D> Iter<'a, K, V, D> {
         V: FromCbor,
         D: FromCbor,
     {
-        match (entry, &mut self.reader.vlog) {
-            (Entry::ZZ { key, value, deltas }, Some(vlog)) => {
-                let value = value.into_native(vlog)?;
-                let mut ds = vec![];
-                if self.versions {
-                    for d in deltas.into_iter() {
-                        ds.push(d.into_native(vlog)?);
-                    }
-                }
-                Ok(Entry::ZZ {
-                    key,
-                    value,
-                    deltas: ds,
-                })
-            }
-            (entry, _) => Ok(entry),
+        match &mut self.reader.vlog {
+            Some(vlog) => entry.into_native(vlog, self.versions),
+            None => Ok(entry),
         }
     }
 }
