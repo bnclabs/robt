@@ -3,9 +3,9 @@ use mkit::{
     db, Cborize,
 };
 
-use std::{borrow::Borrow, convert::TryFrom, io};
+use std::{borrow::Borrow, convert::TryFrom, fmt, io};
 
-use crate::{util, vlog, Error, Result};
+use crate::{reader::Reader, util, vlog, Error, Result};
 
 const ENTRY_VER1: u32 = 0x0001;
 
@@ -138,6 +138,49 @@ impl<K, V, D> Entry<K, V, D> {
                 })
             }
         }
+    }
+
+    pub fn print(&self, prefix: &str, reader: &mut Reader<K, V, D>) -> Result<()>
+    where
+        K: fmt::Debug + FromCbor,
+        V: fmt::Debug + FromCbor,
+        D: fmt::Debug + FromCbor,
+    {
+        let fd = &mut reader.index;
+        let entries = match self {
+            Entry::MM { key, fpos } => {
+                println!("{}MM<{:?}@{}>", prefix, key, fpos);
+                let fpos = io::SeekFrom::Start(*fpos);
+                let block = read_file!(fd, fpos, reader.m_blocksize, "read mm-block")?;
+                Some(util::from_cbor_bytes::<Vec<Entry<K, V, D>>>(&block)?.0)
+            }
+            Entry::MZ { key, fpos } => {
+                println!("{}MZ<{:?}@{}>", prefix, key, fpos);
+                let fpos = io::SeekFrom::Start(*fpos);
+                let block = read_file!(fd, fpos, reader.m_blocksize, "read mm-block")?;
+                Some(util::from_cbor_bytes::<Vec<Entry<K, V, D>>>(&block)?.0)
+            }
+            Entry::ZZ { key, value, deltas } => {
+                println!("{}ZZ---- {:?}; {:?}; {:?}", prefix, key, value, deltas);
+                None
+            }
+        };
+
+        let prefix = prefix.to_string() + "  ";
+        match entries {
+            Some(entries) => {
+                for entry in entries.into_iter() {
+                    let entry = match &mut reader.vlog {
+                        Some(vlog) => entry.into_native(vlog, true)?,
+                        None => entry,
+                    };
+                    entry.print(prefix.as_str(), reader)?;
+                }
+            }
+            None => (),
+        }
+
+        Ok(())
     }
 }
 

@@ -2,19 +2,19 @@ use mkit::{cbor::FromCbor, db};
 
 use std::{
     borrow::Borrow,
-    cmp, fs, io, marker,
+    cmp, fmt, fs, io, marker,
     ops::{Bound, RangeBounds},
 };
 
 use crate::{config::Stats, entry::Entry, util, Error, Result};
 
 pub struct Reader<K, V, D> {
-    m_blocksize: usize,
-    z_blocksize: usize,
-    root: Vec<Entry<K, V, D>>,
+    pub m_blocksize: usize,
+    pub z_blocksize: usize,
+    pub root: Vec<Entry<K, V, D>>,
 
-    index: fs::File,
-    vlog: Option<fs::File>,
+    pub index: fs::File,
+    pub vlog: Option<fs::File>,
 }
 
 impl<K, V, D> Reader<K, V, D>
@@ -220,6 +220,18 @@ where
             },
             Bound::Excluded(skey) => key.cmp(skey),
         }
+    }
+
+    pub fn print(&mut self) -> Result<()>
+    where
+        K: Clone + fmt::Debug + FromCbor,
+        V: Clone + fmt::Debug + FromCbor,
+        D: Clone + fmt::Debug + FromCbor,
+    {
+        for entry in self.root.clone().into_iter() {
+            entry.print("", self)?;
+        }
+        Ok(())
     }
 }
 

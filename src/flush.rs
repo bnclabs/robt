@@ -135,3 +135,7 @@ fn open_file_a(file: &ffi::OsStr) -> Result<fs::File> {
         fs::OpenOptions::new().append(true).open(os_file)
     )?)
 }
+
+#[cfg(test)]
+#[path = "flush_test.rs"]
+mod flush_test;

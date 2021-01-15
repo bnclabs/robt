@@ -305,10 +305,6 @@ mod scans;
 mod util;
 mod vlog;
 
-/// Place holder type to skip bloom filter while building index.
-#[derive(Clone)]
-pub struct NoBitmap;
-
 pub use config::{Config, Stats, FLUSH_QUEUE_SIZE, MBLOCKSIZE, VBLOCKSIZE, ZBLOCKSIZE};
 /// Module implement [Builder] and [Index] type parametrised over
 /// delta-type and bitmap-type.
@@ -319,7 +315,7 @@ pub mod db {
 /// Type alias for [db::Builder] without version control for value-type.
 pub type Builder<K, V> = db::Builder<K, V, mkit::data::NoDiff>;
 /// Type alias for [db::Index] without version control and bitmap.
-pub type Index<K, V> = db::Index<K, V, mkit::data::NoDiff, NoBitmap>;
+pub type Index<K, V> = db::Index<K, V, mkit::data::NoDiff, mkit::NoBitmap>;
 
 /// Type alias for Result return type, used by this package.
 pub type Result<T> = result::Result<T, Error>;

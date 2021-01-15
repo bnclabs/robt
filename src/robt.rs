@@ -30,7 +30,7 @@ use crate::{
     marker::ROOT_MARKER,
     reader::{Iter, Reader},
     scans::{BitmappedScan, BuildScan, CompactScan},
-    util, Error, NoBitmap, Result,
+    util, Error, Result,
 };
 
 /// Marker block size, not to be tampered with.
@@ -122,26 +122,6 @@ impl<K, V, D> Builder<K, V, D> {
         };
 
         Ok(val)
-    }
-}
-
-impl<K, V, D> BuildIndex<K, V, D, NoBitmap> for Builder<K, V, D>
-where
-    K: Clone + IntoCbor,
-    V: Clone + IntoCbor,
-    D: Clone + IntoCbor,
-{
-    type Err = Error;
-
-    fn build_index<I>(&mut self, iter: I, _: NoBitmap) -> Result<()>
-    where
-        I: Iterator<Item = db::Entry<K, V, D>>,
-    {
-        let iter = BuildScan::new(iter, 0 /*seqno*/);
-        let _iter = self.build_from_iter(iter)?;
-        self.build_flush(vec![] /*bitmap*/)?;
-
-        Ok(())
     }
 }
 
@@ -299,19 +279,37 @@ pub struct Index<K, V, D, B> {
     bitmap: Arc<B>,
 }
 
-impl<K, V, D, B> Index<K, V, D, B>
-where
-    K: FromCbor,
-    V: FromCbor,
-    D: FromCbor,
-    B: Bloom,
-{
+impl<K, V, D, B> Index<K, V, D, B> {
     /// Open an existing index for read-only.
-    pub fn open(dir: &ffi::OsStr, name: &str) -> Result<Index<K, V, D, B>> {
-        let mut index = match find_index_file(dir, name) {
-            Some(f) => err_at!(IOError, fs::OpenOptions::new().read(true).open(&f))?,
+    pub fn open(dir: &ffi::OsStr, name: &str) -> Result<Index<K, V, D, B>>
+    where
+        K: FromCbor,
+        V: FromCbor,
+        D: FromCbor,
+        B: Bloom,
+    {
+        match find_index_file(dir, name) {
+            Some(file) => Self::open_file(&file),
             None => err_at!(Invalid, msg: "no index file {:?}/{}", dir, name)?,
+        }
+    }
+
+    /// Open an existing index for read-only, from index file. file must be
+    /// supplied along with full-path.
+    pub fn open_file(file: &ffi::OsStr) -> Result<Index<K, V, D, B>>
+    where
+        K: FromCbor,
+        V: FromCbor,
+        D: FromCbor,
+        B: Bloom,
+    {
+        let dir = match path::Path::new(file).parent() {
+            Some(dir) => dir.as_os_str().to_os_string(),
+            None => err_at!(IOError, msg: "file {:?} does not have parent dir", file)?,
         };
+        let name = String::try_from(IndexFileName(file.to_os_string()))?;
+
+        let mut index = err_at!(IOError, fs::OpenOptions::new().read(true).open(&file))?;
         err_at!(IOError, index.lock_shared())?;
 
         let metas: Vec<MetaItem> = {
@@ -353,7 +351,7 @@ where
                     Some(Some(file_name)) => file_name.to_os_string(),
                     _ => ffi::OsString::from(VlogFileName::from(name.to_string())),
                 };
-                let vp: path::PathBuf = [dir.to_os_string(), file_name].iter().collect();
+                let vp: path::PathBuf = [dir.clone(), file_name].iter().collect();
                 let vlog = err_at!(IOError, fs::OpenOptions::new().read(true).open(&vp))?;
                 err_at!(IOError, vlog.lock_shared())?;
                 Some(vlog)
@@ -364,7 +362,7 @@ where
         let reader = Reader::from_root(root, &stats, index, vlog)?;
 
         let val = Index {
-            dir: dir.to_os_string(),
+            dir: dir,
             name: name.to_string(),
 
             reader,
@@ -384,7 +382,12 @@ where
 
     /// Clone this index instance, with its underlying meta-data shared.
     /// Note that file-descriptors are not shared.
-    pub fn try_clone(&self) -> Result<Self> {
+    pub fn try_clone(&self) -> Result<Self>
+    where
+        K: FromCbor,
+        V: FromCbor,
+        D: FromCbor,
+    {
         let index = match find_index_file(&self.dir, &self.name) {
             Some(ip) => err_at!(IOError, fs::OpenOptions::new().read(true).open(&ip))?,
             None => err_at!(Invalid, msg: "bad file {:?}/{}", &self.dir, &self.name)?,
@@ -440,6 +443,7 @@ where
         K: Clone + Ord + Hash + FromCbor + IntoCbor,
         V: Clone + FromCbor + IntoCbor,
         D: Clone + FromCbor + IntoCbor,
+        B: Bloom,
     {
         let config = {
             let mut config: Config = self.stats.clone().into();
@@ -495,6 +499,10 @@ impl<K, V, D, B> Index<K, V, D, B> {
 
     pub fn to_stats(&self) -> Stats {
         self.stats.clone()
+    }
+
+    pub fn as_bitmap(&self) -> &B {
+        self.bitmap.as_ref()
     }
 
     pub fn to_bitmap(&self) -> B
@@ -631,6 +639,40 @@ impl<K, V, D, B> Index<K, V, D, B> {
             Ok(s)
         }
     }
+
+    pub fn print(&mut self) -> Result<()>
+    where
+        K: Clone + FromCbor + fmt::Debug,
+        V: Clone + FromCbor + fmt::Debug,
+        D: Clone + FromCbor + fmt::Debug,
+        B: Bloom,
+    {
+        println!("name              : {}", self.to_name());
+        println!("app_meta_data     : {}", self.to_app_metadata().len());
+        println!(
+            "entries in bitmap : {}",
+            self.as_bitmap().len().ok().unwrap()
+        );
+        println!("root block at     : {}", self.to_root());
+        println!("sequence num. at  : {}", self.to_seqno());
+        let stats = self.to_stats();
+        println!("stats         :");
+        println!("  z_blocksize  : {}", stats.z_blocksize);
+        println!("  m_blocksize  : {}", stats.m_blocksize);
+        println!("  v_blocksize  : {}", stats.v_blocksize);
+        println!("  delta_ok     : {}", stats.delta_ok);
+        println!("  vlog_file    : {:?}", stats.vlog_file);
+        println!("  value_in_vlog: {}", stats.value_in_vlog);
+        println!("  n_count      : {}", stats.n_count);
+        println!("  n_deleted    : {}", stats.n_deleted);
+        println!("  seqno        : {}", stats.seqno);
+        println!("  n_abytes     : {}", stats.n_abytes);
+        println!("  n_bitmap     : {}", stats.n_bitmap);
+        println!("  build_time   : {}", stats.build_time);
+        println!("  epoch        : {}", stats.epoch);
+        println!("");
+        self.reader.print()
+    }
 }
 
 fn find_index_file(dir: &ffi::OsStr, name: &str) -> Option<ffi::OsString> {
@@ -687,3 +729,7 @@ fn open_file_r(file: &ffi::OsStr) -> Result<fs::File> {
         fs::OpenOptions::new().read(true).open(os_file)
     )?)
 }
+
+#[cfg(test)]
+#[path = "robt_test.rs"]
+mod robt_test;

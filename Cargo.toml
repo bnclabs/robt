@@ -11,11 +11,21 @@ license = "MIT"
 readme = "README.md"
 edition = "2018"
 
+[[bin]]
+name = "robt"
+required-features = ["robt"]
+
 [dependencies]
 log = "0.4.11"
 lazy_static = "1.2.0"
 mkit = { path = "../mkit", version = "0.3.0" }
 fs2 = "0.4.3"
 
+structopt = { version = "0.3.20", default-features = false, optional = true }
+
 [dev-dependencies]
 rand = { version = "0.7.3", features = ["small_rng"] }
+arbitrary = { version = "0.4", features = ["derive"] }
+
+[features]
+robt = ["structopt"]
