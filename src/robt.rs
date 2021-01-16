@@ -24,7 +24,7 @@ use std::{
 
 use crate::{
     build,
-    config::{Config, Stats},
+    config::{to_index_file, to_vlog_file, Config, Stats},
     files::{IndexFileName, VlogFileName},
     flush::Flusher,
     marker::ROOT_MARKER,
@@ -58,21 +58,21 @@ pub struct Builder<K, V, D> {
 impl<K, V, D> Builder<K, V, D> {
     /// Build a fresh index, using configuration and snapshot specific
     /// meta-data.
-    pub fn initial(c: Config, app_meta: Vec<u8>) -> Result<Self> {
-        let queue_size = c.flush_queue_size;
+    pub fn initial(config: Config, app_meta: Vec<u8>) -> Result<Self> {
+        let queue_size = config.flush_queue_size;
         let iflush = {
-            let file_path = to_index_file(&c.dir, &c.name);
+            let file_path = to_index_file(&config.dir, &config.name);
             Rc::new(RefCell::new(Flusher::new(&file_path, true, queue_size)?))
         };
-        let vflush = if c.value_in_vlog || c.delta_ok {
-            let file_path = to_vlog_file(&c.dir, &c.name);
+        let vflush = if config.value_in_vlog || config.delta_ok {
+            let file_path = to_vlog_file(&config.dir, &config.name);
             Rc::new(RefCell::new(Flusher::new(&file_path, true, queue_size)?))
         } else {
             Rc::new(RefCell::new(Flusher::empty()))
         };
 
         let val = Builder {
-            config: c,
+            config,
             iflush,
             vflush,
 
@@ -684,26 +684,6 @@ fn find_index_file(dir: &ffi::OsStr, name: &str) -> Option<ffi::OsString> {
         );
 
     entry.map(|entry| entry.file_name())
-}
-
-fn to_index_file(dir: &ffi::OsStr, name: &str) -> ffi::OsString {
-    let file_path: path::PathBuf = [
-        dir.to_os_string(),
-        IndexFileName::from(name.to_string()).into(),
-    ]
-    .iter()
-    .collect();
-    file_path.into_os_string()
-}
-
-fn to_vlog_file(dir: &ffi::OsStr, name: &str) -> ffi::OsString {
-    let file_path: path::PathBuf = [
-        dir.to_os_string(),
-        VlogFileName::from(name.to_string()).into(),
-    ]
-    .iter()
-    .collect();
-    file_path.into_os_string()
 }
 
 fn purge_file(file: ffi::OsString) -> Result<&'static str> {

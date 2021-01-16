@@ -8,7 +8,7 @@ use super::*;
 #[test]
 fn test_flush() {
     let seed: u128 = random();
-    let seed: u128 = 242003304625878770005592428923264706511;
+    // let seed: u128 = 242003304625878770005592428923264706511;
     println!("test_flush {}", seed);
     let mut rng = SmallRng::from_seed(seed.to_le_bytes());
 

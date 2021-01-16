@@ -4,7 +4,7 @@ use rand::{prelude::random, rngs::SmallRng, Rng, SeedableRng};
 #[test]
 fn test_entry() {
     let seed: u128 = random();
-    println!("test_simple_value {}", seed);
+    println!("test_entry {}", seed);
     let mut rng = SmallRng::from_seed(seed.to_le_bytes());
     let key = 10;
 

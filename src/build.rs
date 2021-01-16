@@ -9,15 +9,6 @@ use crate::{
     config::Config, entry::Entry, flush::Flusher, scans::BuildScan, util, Result,
 };
 
-macro_rules! next_item {
-    ($name:ident) => {
-        match $name.entry.take() {
-            Some(item) => Some(Ok(item)),
-            None => $name.iter.next(),
-        }
-    };
-}
-
 pub struct BuildMM<K, V, D, I> {
     m_blocksize: usize,
     iflush: Rc<RefCell<Flusher>>,
@@ -50,19 +41,20 @@ where
     type Item = Result<(K, u64)>;
 
     fn next(&mut self) -> Option<Self::Item> {
-        let mut iflush = self.iflush.borrow_mut();
-        let m_blocksize = self.m_blocksize;
-
         let mut mblock = Vec::with_capacity(self.m_blocksize);
 
-        let fpos = iflush.to_fpos().unwrap_or(0);
+        let fpos = self.iflush.borrow().to_fpos().unwrap_or(0);
         let mut first_key: Option<K> = None;
         let mut n = 0;
 
         iter_result!(Cbor::Major4(cbor::Info::Indefinite, vec![]).encode(&mut mblock));
 
         loop {
-            match next_item!(self) {
+            let entry = {
+                let entry = self.entry.take().map(|e| Some(Ok(e)));
+                entry.unwrap_or_else(|| self.iter.next())
+            };
+            match entry {
                 Some(Ok((key, fpos))) => {
                     n += 1;
 
@@ -71,7 +63,7 @@ where
                         let e = Entry::<K, V, D>::new_mm(key.clone(), fpos);
                         iter_result!(util::into_cbor_bytes(e))
                     };
-                    if (mblock.len() + ibytes.len()) > m_blocksize {
+                    if (mblock.len() + ibytes.len()) > self.m_blocksize {
                         self.entry = Some((key, fpos));
                         break;
                     }
@@ -88,7 +80,7 @@ where
 
         if n > 1 {
             mblock.resize(self.m_blocksize, 0);
-            iter_result!(iflush.flush(mblock));
+            iter_result!(self.iflush.borrow_mut().flush(mblock));
         }
         Some(Ok((first_key.unwrap(), fpos)))
     }
@@ -126,25 +118,26 @@ where
     type Item = Result<(K, u64)>;
 
     fn next(&mut self) -> Option<Self::Item> {
-        let mut iflush = self.iflush.borrow_mut();
-        let m_blocksize = self.m_blocksize;
-
         let mut mblock = Vec::with_capacity(self.m_blocksize);
 
-        let fpos = iflush.to_fpos().unwrap_or(0);
+        let fpos = self.iflush.borrow().to_fpos().unwrap_or(0);
         let mut first_key: Option<K> = None;
 
         iter_result!(Cbor::Major4(cbor::Info::Indefinite, vec![]).encode(&mut mblock));
 
         loop {
-            match next_item!(self) {
+            let entry = {
+                let entry = self.entry.take().map(|e| Some(Ok(e)));
+                entry.unwrap_or_else(|| self.iter.next())
+            };
+            match entry {
                 Some(Ok((key, fpos))) => {
                     first_key.get_or_insert_with(|| key.clone());
                     let ibytes = {
                         let e = Entry::<K, V, D>::new_mz(key.clone(), fpos);
                         iter_result!(util::into_cbor_bytes(e))
                     };
-                    if (mblock.len() + ibytes.len()) > m_blocksize {
+                    if (mblock.len() + ibytes.len()) > self.m_blocksize {
                         self.entry = Some((key, fpos));
                         break;
                     }
@@ -160,7 +153,7 @@ where
         mblock.extend_from_slice(&brk);
 
         mblock.resize(self.m_blocksize, 0);
-        iter_result!(iflush.flush(mblock));
+        iter_result!(self.iflush.borrow_mut().flush(mblock));
         Some(Ok((first_key.unwrap(), fpos)))
     }
 }
@@ -202,21 +195,16 @@ where
     type Item = Result<(K, u64)>;
 
     fn next(&mut self) -> Option<Self::Item> {
-        let mut iflush = self.iflush.borrow_mut();
-        let mut vflush = self.vflush.borrow_mut();
-        let in_vlog = self.value_in_vlog;
-        let z_blocksize = self.z_blocksize;
-
         let mut zblock = Vec::with_capacity(self.z_blocksize);
         let mut vblock = Vec::with_capacity(self.v_blocksize);
 
-        let fpos = iflush.to_fpos().unwrap_or(0);
+        let fpos = self.iflush.borrow().to_fpos().unwrap_or(0);
         let mut first_key: Option<K> = None;
 
         iter_result!(Cbor::Major4(cbor::Info::Indefinite, vec![]).encode(&mut zblock));
 
         let mut iter = self.iter.borrow_mut();
-        let mut vfpos = vflush.to_fpos().unwrap_or(0);
+        let mut vfpos = self.vflush.borrow().to_fpos().unwrap_or(0);
 
         loop {
             match iter.next() {
@@ -224,11 +212,11 @@ where
                     first_key.get_or_insert_with(|| entry.key.clone());
                     let (e, vbytes) = {
                         let e = Entry::<K, V, D>::from(entry.clone());
-                        iter_result!(e.into_reference(vfpos, in_vlog))
+                        iter_result!(e.into_reference(vfpos, self.value_in_vlog))
                     };
                     let ibytes = iter_result!(util::into_cbor_bytes(e));
 
-                    if (zblock.len() + ibytes.len()) > z_blocksize {
+                    if (zblock.len() + ibytes.len()) > self.z_blocksize {
                         iter.push(entry);
                         break;
                     }
@@ -245,8 +233,8 @@ where
         zblock.extend_from_slice(&brk);
 
         zblock.resize(self.z_blocksize, 0);
-        iter_result!(vflush.flush(vblock));
-        iter_result!(iflush.flush(zblock));
+        iter_result!(self.vflush.borrow_mut().flush(vblock));
+        iter_result!(self.iflush.borrow_mut().flush(zblock));
         Some(Ok((first_key.unwrap(), fpos)))
     }
 }
