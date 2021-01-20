@@ -149,19 +149,21 @@ impl<K, V, D> Entry<K, V, D> {
         let fd = &mut reader.index;
         let entries = match self {
             Entry::MM { key, fpos } => {
-                println!("{}MM<{:?}@{}>", prefix, key, fpos);
-                let fpos = io::SeekFrom::Start(*fpos);
-                let block = read_file!(fd, fpos, reader.m_blocksize, "read mm-block")?;
-                Some(util::from_cbor_bytes::<Vec<Entry<K, V, D>>>(&block)?.0)
+                let off = io::SeekFrom::Start(*fpos);
+                let block = read_file!(fd, off, reader.m_blocksize, "read mm-block")?;
+                let entries = util::from_cbor_bytes::<Vec<Entry<K, V, D>>>(&block)?.0;
+                println!("{}MM<{:?}@{},{}>", prefix, key, fpos, entries.len());
+                Some(entries)
             }
             Entry::MZ { key, fpos } => {
-                println!("{}MZ<{:?}@{}>", prefix, key, fpos);
-                let fpos = io::SeekFrom::Start(*fpos);
-                let block = read_file!(fd, fpos, reader.m_blocksize, "read mm-block")?;
-                Some(util::from_cbor_bytes::<Vec<Entry<K, V, D>>>(&block)?.0)
+                let off = io::SeekFrom::Start(*fpos);
+                let block = read_file!(fd, off, reader.m_blocksize, "read mm-block")?;
+                let entries = util::from_cbor_bytes::<Vec<Entry<K, V, D>>>(&block)?.0;
+                println!("{}MZ<{:?}@{},{}>", prefix, key, fpos, entries.len());
+                Some(entries)
             }
             Entry::ZZ { key, value, deltas } => {
-                println!("{}ZZ---- {:?}; {:?}; {:?}", prefix, key, value, deltas);
+                println!("{}ZZ---- key:{:?}; {:?}; {:?}", prefix, key, value, deltas);
                 None
             }
         };

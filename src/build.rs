@@ -42,9 +42,10 @@ where
 
     fn next(&mut self) -> Option<Self::Item> {
         let mut mblock = Vec::with_capacity(self.m_blocksize);
+        let block_size = self.m_blocksize.saturating_sub(1);
 
-        let fpos = self.iflush.borrow().to_fpos().unwrap_or(0);
         let mut first_key: Option<K> = None;
+        let mut curr_fpos = None;
         let mut n = 0;
 
         iter_result!(Cbor::Major4(cbor::Info::Indefinite, vec![]).encode(&mut mblock));
@@ -56,6 +57,7 @@ where
             };
             match entry {
                 Some(Ok((key, fpos))) => {
+                    curr_fpos = Some(fpos);
                     n += 1;
 
                     first_key.get_or_insert_with(|| key.clone());
@@ -63,7 +65,7 @@ where
                         let e = Entry::<K, V, D>::new_mm(key.clone(), fpos);
                         iter_result!(util::into_cbor_bytes(e))
                     };
-                    if (mblock.len() + ibytes.len()) > self.m_blocksize {
+                    if (mblock.len() + ibytes.len()) > block_size {
                         self.entry = Some((key, fpos));
                         break;
                     }
@@ -77,12 +79,14 @@ where
 
         let brk = iter_result!(util::into_cbor_bytes(cbor::SimpleValue::Break));
         mblock.extend_from_slice(&brk);
+        mblock.resize(self.m_blocksize, 0);
 
         if n > 1 {
-            mblock.resize(self.m_blocksize, 0);
+            curr_fpos = Some(self.iflush.borrow().to_fpos().unwrap_or(0));
             iter_result!(self.iflush.borrow_mut().flush(mblock));
         }
-        Some(Ok((first_key.unwrap(), fpos)))
+
+        Some(Ok((first_key.unwrap(), curr_fpos.unwrap())))
     }
 }
 
@@ -119,8 +123,8 @@ where
 
     fn next(&mut self) -> Option<Self::Item> {
         let mut mblock = Vec::with_capacity(self.m_blocksize);
+        let block_size = self.m_blocksize.saturating_sub(1);
 
-        let fpos = self.iflush.borrow().to_fpos().unwrap_or(0);
         let mut first_key: Option<K> = None;
 
         iter_result!(Cbor::Major4(cbor::Info::Indefinite, vec![]).encode(&mut mblock));
@@ -137,7 +141,7 @@ where
                         let e = Entry::<K, V, D>::new_mz(key.clone(), fpos);
                         iter_result!(util::into_cbor_bytes(e))
                     };
-                    if (mblock.len() + ibytes.len()) > self.m_blocksize {
+                    if (mblock.len() + ibytes.len()) > block_size {
                         self.entry = Some((key, fpos));
                         break;
                     }
@@ -151,8 +155,10 @@ where
 
         let brk = iter_result!(util::into_cbor_bytes(cbor::SimpleValue::Break));
         mblock.extend_from_slice(&brk);
-
         mblock.resize(self.m_blocksize, 0);
+
+        let fpos = self.iflush.borrow().to_fpos().unwrap_or(0);
+
         iter_result!(self.iflush.borrow_mut().flush(mblock));
         Some(Ok((first_key.unwrap(), fpos)))
     }
@@ -197,8 +203,8 @@ where
     fn next(&mut self) -> Option<Self::Item> {
         let mut zblock = Vec::with_capacity(self.z_blocksize);
         let mut vblock = Vec::with_capacity(self.v_blocksize);
+        let block_size = self.z_blocksize.saturating_sub(1);
 
-        let fpos = self.iflush.borrow().to_fpos().unwrap_or(0);
         let mut first_key: Option<K> = None;
 
         iter_result!(Cbor::Major4(cbor::Info::Indefinite, vec![]).encode(&mut zblock));
@@ -216,7 +222,7 @@ where
                     };
                     let ibytes = iter_result!(util::into_cbor_bytes(e));
 
-                    if (zblock.len() + ibytes.len()) > self.z_blocksize {
+                    if (zblock.len() + ibytes.len()) > block_size {
                         iter.push(entry);
                         break;
                     }
@@ -231,8 +237,10 @@ where
 
         let brk = iter_result!(util::into_cbor_bytes(cbor::SimpleValue::Break));
         zblock.extend_from_slice(&brk);
-
         zblock.resize(self.z_blocksize, 0);
+
+        let fpos = self.iflush.borrow().to_fpos().unwrap_or(0);
+
         iter_result!(self.vflush.borrow_mut().flush(vblock));
         iter_result!(self.iflush.borrow_mut().flush(zblock));
         Some(Ok((first_key.unwrap(), fpos)))

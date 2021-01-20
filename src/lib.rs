@@ -334,6 +334,7 @@ pub enum Error {
     ThreadFail(String, String),
     InvalidFile(String, String),
     KeyNotFound(String, String),
+    Retry(String, String),
 }
 
 impl fmt::Display for Error {
@@ -350,6 +351,7 @@ impl fmt::Display for Error {
             ThreadFail(p, msg) => write!(f, "{} ThreadFail: {}", p, msg),
             InvalidFile(p, msg) => write!(f, "{} InvalidFile: {}", p, msg),
             KeyNotFound(p, msg) => write!(f, "{} KeyNotFound: {}", p, msg),
+            Retry(p, msg) => write!(f, "{} Retry: {}", p, msg),
         }
     }
 }

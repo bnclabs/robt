@@ -67,7 +67,7 @@ impl Flusher {
             Flusher::File { fpos, tx, .. } => {
                 *fpos = tx.as_ref().unwrap().request(data)?
             }
-            Flusher::None => unreachable!(),
+            Flusher::None => (),
         };
         Ok(())
     }

@@ -15,7 +15,7 @@ use std::{
     convert::{TryFrom, TryInto},
     ffi, fmt, fs,
     hash::Hash,
-    io, marker,
+    io, marker, mem,
     ops::{Bound, RangeBounds},
     path,
     rc::Rc,
@@ -72,12 +72,12 @@ impl<K, V, D> Builder<K, V, D> {
         };
 
         let val = Builder {
-            config,
+            config: config.clone(),
             iflush,
             vflush,
 
             app_meta,
-            stats: Stats::default(),
+            stats: config.into(),
             root: u64::default(),
 
             _key: marker::PhantomData,
@@ -108,12 +108,12 @@ impl<K, V, D> Builder<K, V, D> {
         };
 
         let val = Builder {
-            config: c,
+            config: c.clone(),
             iflush,
             vflush,
 
             app_meta: meta,
-            stats: Stats::default(),
+            stats: c.into(),
             root: u64::default(),
 
             _key: marker::PhantomData,
@@ -204,13 +204,13 @@ where
             Some(Err(err)) => return Err(err),
             None => err_at!(Invalid, msg: "empty iterator")?,
         };
+        mem::drop(build);
 
         Ok((Rc::try_unwrap(iter).ok().unwrap().into_inner(), root))
     }
 
     fn build_flush(&mut self, bitmap: Vec<u8>) -> Result<(u64, u64)> {
-        let mut block = self.to_meta_blocks(bitmap)?;
-        block.extend_from_slice(&(u64::try_from(block.len()).unwrap().to_be_bytes()));
+        let block = self.to_meta_blocks(bitmap)?;
 
         self.iflush.borrow_mut().flush(block)?;
 
@@ -232,7 +232,15 @@ where
         ];
 
         let mut block = util::into_cbor_bytes(metas)?;
-        block.resize(Self::compute_root_block(block.len()), 0);
+        let len = err_at!(Fatal, u64::try_from(block.len()))?;
+        let m = Self::compute_root_block(block.len() + 16);
+        block.resize(m, 0);
+        let off = err_at!(Fatal, u64::try_from(m))?;
+
+        // 8-byte length-prefixed-message, message is the meta-block.
+        block[m - 16..m - 8].copy_from_slice(&off.to_be_bytes());
+        block[m - 8..m].copy_from_slice(&len.to_be_bytes());
+
         Ok(block)
     }
 
@@ -250,7 +258,7 @@ where
 /// the index a list of meta items are appended to the tip of index-file.
 ///
 /// [Btree]: https://en.wikipedia.org/wiki/B-tree
-#[derive(Clone, Cborize)]
+#[derive(Clone, Debug, Cborize)]
 pub enum MetaItem {
     /// Application supplied metadata, typically serialized and opaque to `robt`.
     AppMetadata(Vec<u8>),
@@ -310,16 +318,20 @@ impl<K, V, D, B> Index<K, V, D, B> {
         let name = String::try_from(IndexFileName(file.to_os_string()))?;
 
         let mut index = err_at!(IOError, fs::OpenOptions::new().read(true).open(&file))?;
-        err_at!(IOError, index.lock_shared())?;
 
         let metas: Vec<MetaItem> = {
-            let n = {
+            let off = {
+                let seek = io::SeekFrom::End(-16);
+                let data = read_file!(index, seek, 8, "reading meta-off from index")?;
+                i64::from_be_bytes(data.try_into().unwrap())
+            };
+            let len = {
                 let seek = io::SeekFrom::End(-8);
                 let data = read_file!(index, seek, 8, "reading meta-len from index")?;
                 u64::from_be_bytes(data.try_into().unwrap())
             };
-            let seek = io::SeekFrom::End(-8 - i64::try_from(n).unwrap());
-            let block = read_file!(index, seek, n, "reading meta-data from index")?;
+            let seek = io::SeekFrom::End(-off);
+            let block = read_file!(index, seek, len, "reading meta-data from index")?;
             util::from_cbor_bytes(&block)?.0
         };
 
@@ -353,7 +365,6 @@ impl<K, V, D, B> Index<K, V, D, B> {
                 };
                 let vp: path::PathBuf = [dir.clone(), file_name].iter().collect();
                 let vlog = err_at!(IOError, fs::OpenOptions::new().read(true).open(&vp))?;
-                err_at!(IOError, vlog.lock_shared())?;
                 Some(vlog)
             }
             false => None,
@@ -686,18 +697,22 @@ fn find_index_file(dir: &ffi::OsStr, name: &str) -> Option<ffi::OsString> {
     entry.map(|entry| entry.file_name())
 }
 
-fn purge_file(file: ffi::OsString) -> Result<&'static str> {
+fn purge_file(file: ffi::OsString) -> Result<()> {
     let fd = open_file_r(&file)?;
     match fd.try_lock_exclusive() {
         Ok(_) => {
             err_at!(IOError, fs::remove_file(&file), "remove file {:?}", file)?;
             debug!(target: "robt", "purged file {:?}", file);
-            fd.unlock().ok();
-            Ok("ok")
+            err_at!(
+                IOError,
+                fd.unlock(),
+                "fail unlock for exclusive lock {:?}",
+                file
+            )
         }
         Err(_) => {
             debug!(target: "robt", "unable to get exclusive lock for {:?}", file);
-            Ok("locked")
+            err_at!(Retry, msg: "file {:?} locked", file)
         }
     }
 }

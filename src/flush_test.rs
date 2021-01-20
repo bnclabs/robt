@@ -12,7 +12,7 @@ fn test_flush() {
     println!("test_flush {}", seed);
     let mut rng = SmallRng::from_seed(seed.to_le_bytes());
 
-    let dir = std::env::temp_dir();
+    let dir = std::env::temp_dir().join("test_flush");
     fs::create_dir_all(&dir).unwrap();
     let file = dir.join("test-flusher.data");
     println!("flush to file {:?}", file);

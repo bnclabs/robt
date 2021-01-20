@@ -10,7 +10,7 @@ fn test_build1() {
     println!("test_build1 {}", seed);
     // TODO let mut rng = SmallRng::from_seed(seed.to_le_bytes());
 
-    let dir = std::env::temp_dir();
+    let dir = std::env::temp_dir().join("test_build1");
     let cfg = Config {
         dir: dir.into_os_string(),
         name: "test_build".to_string(),
@@ -23,7 +23,8 @@ fn test_build1() {
     };
     println!("test_build1 index file {:?}", cfg.to_index_file_name());
 
-    let mdb = load_index(seed, false, 1_000_000);
+    let n = 1_000_000;
+    let mdb = load_index(seed, false, n);
 
     let app_meta_data = "test_build1".as_bytes().to_vec();
     let mut build = Builder::initial(cfg, app_meta_data).unwrap();
@@ -41,6 +42,7 @@ fn load_index(seed: u128, diff: bool, count: usize) -> Mdb<u16, u64, u64> {
             true => index.insert(key, value).ok().map(|_| ()),
             false => index.set(key, value).ok().map(|_| ()),
         };
+        // println!("{} {}", _i, key);
     }
 
     index

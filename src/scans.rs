@@ -16,7 +16,7 @@ pub struct BuildScan<K, V, D, I> {
     start: time::SystemTime,
     seqno: u64,
     n_count: u64,
-    n_deleted: usize,
+    n_deleted: u64,
 
     _key: marker::PhantomData<K>,
     _val: marker::PhantomData<V>,
@@ -30,8 +30,8 @@ impl<K, V, D, I> BuildScan<K, V, D, I> {
 
             start: time::SystemTime::now(),
             seqno,
-            n_count: Default::default(),
-            n_deleted: Default::default(),
+            n_count: u64::default(),
+            n_deleted: u64::default(),
 
             _key: marker::PhantomData,
             _val: marker::PhantomData,
@@ -39,9 +39,13 @@ impl<K, V, D, I> BuildScan<K, V, D, I> {
     }
 
     pub fn push(&mut self, entry: db::Entry<K, V, D>) {
-        self.entry = Some(entry);
+        self.entry = match &self.entry {
+            None => Some(entry),
+            Some(_) => unreachable!(),
+        }
     }
 
+    // return (build_time, seqno, count, deleted, epoch, iter)
     pub fn unwrap(self) -> Result<(u64, u64, u64, u64, u64, I)> {
         let build_time = {
             let elapsed = err_at!(Fatal, self.start.elapsed())?;
@@ -55,7 +59,7 @@ impl<K, V, D, I> BuildScan<K, V, D, I> {
             build_time,
             self.seqno,
             self.n_count,
-            u64::try_from(self.n_deleted).unwrap(),
+            self.n_deleted,
             epoch,
             self.iter,
         ))
@@ -165,13 +169,8 @@ where
     #[inline]
     fn next(&mut self) -> Option<Self::Item> {
         loop {
-            match self.iter.next() {
-                Some(entry) => {
-                    if let Some(entry) = entry.purge(self.cutoff) {
-                        break Some(entry);
-                    }
-                }
-                None => break None,
+            if let Some(entry) = self.iter.next()?.purge(self.cutoff) {
+                break Some(entry);
             }
         }
     }

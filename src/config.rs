@@ -68,6 +68,21 @@ pub struct Config {
     pub flush_queue_size: usize,
 }
 
+impl From<Stats> for Config {
+    fn from(val: Stats) -> Config {
+        Config {
+            dir: ffi::OsString::default(),
+            name: val.name,
+            z_blocksize: val.z_blocksize,
+            m_blocksize: val.m_blocksize,
+            v_blocksize: val.v_blocksize,
+            delta_ok: val.delta_ok,
+            value_in_vlog: val.value_in_vlog,
+            flush_queue_size: FLUSH_QUEUE_SIZE,
+        }
+    }
+}
+
 impl Config {
     /// Create a new configuration value, use the `set_*` methods to
     /// add more configuration.
@@ -125,7 +140,7 @@ impl Config {
 }
 
 /// Statistic for Read Only BTree index.
-#[derive(Clone, Default, Cborize)]
+#[derive(Clone, Default, Debug, Cborize)]
 pub struct Stats {
     /// Comes from [Config] type.
     pub name: String,
@@ -163,17 +178,23 @@ impl Stats {
     const ID: u32 = STATS_VER1;
 }
 
-impl From<Stats> for Config {
-    fn from(val: Stats) -> Config {
-        Config {
-            dir: ffi::OsString::default(),
-            name: val.name,
-            z_blocksize: val.z_blocksize,
-            m_blocksize: val.m_blocksize,
-            v_blocksize: val.v_blocksize,
-            delta_ok: val.delta_ok,
-            value_in_vlog: val.value_in_vlog,
-            flush_queue_size: FLUSH_QUEUE_SIZE,
+impl From<Config> for Stats {
+    fn from(config: Config) -> Stats {
+        Stats {
+            name: config.name.clone(),
+            z_blocksize: config.z_blocksize,
+            m_blocksize: config.m_blocksize,
+            v_blocksize: config.v_blocksize,
+            delta_ok: config.delta_ok,
+            vlog_file: Option::default(),
+            value_in_vlog: config.value_in_vlog,
+            n_count: u64::default(),
+            n_deleted: usize::default(),
+            seqno: u64::default(),
+            n_abytes: u64::default(),
+            n_bitmap: usize::default(),
+            build_time: u64::default(),
+            epoch: u64::default(),
         }
     }
 }

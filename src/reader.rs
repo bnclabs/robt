@@ -1,3 +1,5 @@
+use fs2::FileExt;
+use log::error;
 use mkit::{cbor::FromCbor, db};
 
 use std::{
@@ -17,6 +19,26 @@ pub struct Reader<K, V, D> {
     pub vlog: Option<fs::File>,
 }
 
+impl<K, V, D> Drop for Reader<K, V, D> {
+    fn drop(&mut self) {
+        match self.index.unlock() {
+            Err(err) => error!(
+                target: "robt", "fail to unlock reader lock for index: {}", err
+            ),
+            _ => (),
+        };
+        match self.vlog.as_ref() {
+            Some(vlog) => match vlog.unlock() {
+                Err(err) => error!(
+                    target: "robt", "fail to unlock reader lock for vlog: {}", err
+                ),
+                _ => (),
+            },
+            None => (),
+        };
+    }
+}
+
 impl<K, V, D> Reader<K, V, D>
 where
     K: FromCbor,
@@ -34,6 +56,12 @@ where
             let block = read_file!(&mut index, fpos, stats.m_blocksize, "read block")?;
             util::from_cbor_bytes(&block)?.0
         };
+
+        err_at!(IOError, index.lock_shared())?;
+        match vlog.as_ref() {
+            Some(vlog) => err_at!(IOError, vlog.lock_shared())?,
+            None => (),
+        }
 
         Ok(Reader {
             m_blocksize: stats.m_blocksize,
