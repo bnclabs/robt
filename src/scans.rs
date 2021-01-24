@@ -175,3 +175,7 @@ where
         }
     }
 }
+
+#[cfg(test)]
+#[path = "scans_test.rs"]
+mod scans_test;

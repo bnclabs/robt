@@ -165,8 +165,6 @@ pub struct Stats {
     pub seqno: u64,
     /// Older size of value-log file, applicable only in incremental build.
     pub n_abytes: u64,
-    /// Number of entries in bitmap.
-    pub n_bitmap: usize,
 
     /// Time taken to build this btree.
     pub build_time: u64,
@@ -192,7 +190,6 @@ impl From<Config> for Stats {
             n_deleted: usize::default(),
             seqno: u64::default(),
             n_abytes: u64::default(),
-            n_bitmap: usize::default(),
             build_time: u64::default(),
             epoch: u64::default(),
         }

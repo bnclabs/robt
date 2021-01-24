@@ -1,6 +1,5 @@
-use mkit::NoBitmap;
-use ppom::Mdb;
-use rand::{prelude::random, rngs::SmallRng, Rng, SeedableRng};
+use mkit::nobitmap::NoBitmap;
+use rand::{prelude::random, rngs::SmallRng, SeedableRng};
 
 use super::*;
 
@@ -8,7 +7,7 @@ use super::*;
 fn test_build1() {
     let seed: u128 = random();
     println!("test_build1 {}", seed);
-    // TODO let mut rng = SmallRng::from_seed(seed.to_le_bytes());
+    let _rng = SmallRng::from_seed(seed.to_le_bytes());
 
     let dir = std::env::temp_dir().join("test_build1");
     let cfg = Config {
@@ -23,27 +22,9 @@ fn test_build1() {
     };
     println!("test_build1 index file {:?}", cfg.to_index_file_name());
 
-    let n = 1_000_000;
-    let mdb = load_index(seed, false, n);
+    let mdb = util::load_index(seed, false, 1_000_000, 0);
 
     let app_meta_data = "test_build1".as_bytes().to_vec();
     let mut build = Builder::initial(cfg, app_meta_data).unwrap();
     build.build_index(mdb.iter().unwrap(), NoBitmap).unwrap();
-}
-
-fn load_index(seed: u128, diff: bool, count: usize) -> Mdb<u16, u64, u64> {
-    let mut rng = SmallRng::from_seed(seed.to_le_bytes());
-    let index = Mdb::new("testing");
-
-    for _i in 0..count {
-        let key: u16 = rng.gen();
-        let value: u64 = rng.gen();
-        match diff {
-            true => index.insert(key, value).ok().map(|_| ()),
-            false => index.set(key, value).ok().map(|_| ()),
-        };
-        // println!("{} {}", _i, key);
-    }
-
-    index
 }

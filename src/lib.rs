@@ -53,7 +53,7 @@
 //! let config = Config::new("/opt/data/", "movies");
 //! // use one or more set_ method to configure the btree parameters.
 //! let builder = Build::initial(config, app_meta);
-//! builder.from_iter(iter, NoBitmap);
+//! builder.from_iter(iter, mkit::nobitmap::NoBitmap);
 //!
 //! // Subsequently open an index as,
 //! let reader1 = Index::open("/opt/data", "movies").expect("fail");
@@ -315,7 +315,7 @@ pub mod db {
 /// Type alias for [db::Builder] without version control for value-type.
 pub type Builder<K, V> = db::Builder<K, V, mkit::data::NoDiff>;
 /// Type alias for [db::Index] without version control and bitmap.
-pub type Index<K, V> = db::Index<K, V, mkit::data::NoDiff, mkit::NoBitmap>;
+pub type Index<K, V> = db::Index<K, V, mkit::data::NoDiff, mkit::nobitmap::NoBitmap>;
 
 /// Type alias for Result return type, used by this package.
 pub type Result<T> = result::Result<T, Error>;

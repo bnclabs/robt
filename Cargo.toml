@@ -27,6 +27,7 @@ structopt = { version = "0.3.20", default-features = false, optional = true }
 rand = { version = "0.7.3", features = ["small_rng"] }
 arbitrary = { version = "0.4", features = ["derive"] }
 ppom = { path = "../ppom", version = "0.5.0"}
+xorfilter-rs = { path = "../xorfilter", version = "0.2.0"}
 
 [features]
 robt = ["structopt"]

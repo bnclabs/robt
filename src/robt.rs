@@ -146,9 +146,8 @@ where
         let iter = self.build_from_iter(iter)?;
 
         let (bitmap, _) = iter.unwrap()?;
-        self.stats.n_bitmap = err_at!(Fatal, bitmap.len(), "bitmap.len")?;
 
-        self.build_flush(bitmap.to_vec())?;
+        self.build_flush(err_at!(Fatal, bitmap.to_bytes())?)?;
 
         Ok(())
     }
@@ -341,7 +340,7 @@ impl<K, V, D, B> Index<K, V, D, B> {
         };
 
         let bitmap = match &metas[2] {
-            MetaItem::Bitmap(data) => err_at!(Fatal, B::from_vec(&data))?,
+            MetaItem::Bitmap(data) => err_at!(Fatal, B::from_bytes(&data))?.0,
             _ => unreachable!(),
         };
 
@@ -660,10 +659,6 @@ impl<K, V, D, B> Index<K, V, D, B> {
     {
         println!("name              : {}", self.to_name());
         println!("app_meta_data     : {}", self.to_app_metadata().len());
-        println!(
-            "entries in bitmap : {}",
-            self.as_bitmap().len().ok().unwrap()
-        );
         println!("root block at     : {}", self.to_root());
         println!("sequence num. at  : {}", self.to_seqno());
         let stats = self.to_stats();
@@ -678,7 +673,6 @@ impl<K, V, D, B> Index<K, V, D, B> {
         println!("  n_deleted    : {}", stats.n_deleted);
         println!("  seqno        : {}", stats.seqno);
         println!("  n_abytes     : {}", stats.n_abytes);
-        println!("  n_bitmap     : {}", stats.n_bitmap);
         println!("  build_time   : {}", stats.build_time);
         println!("  epoch        : {}", stats.epoch);
         println!("");
