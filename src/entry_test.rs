@@ -40,10 +40,10 @@ fn test_entry() {
 
     let res = mm.clone().into_reference(0, true).unwrap();
     assert_eq!(mm, res.0);
-    assert!(res.1.len() == 0);
+    assert!(res.1.is_empty());
     let res = mz.clone().into_reference(0, true).unwrap();
     assert_eq!(mz, res.0);
-    assert!(res.1.len() == 0);
+    assert!(res.1.is_empty());
 
     let (zz_ref, data) = zz.clone().into_reference(0, true).unwrap();
     assert_eq!(zz_ref.to_key(), key);

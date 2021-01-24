@@ -158,8 +158,9 @@
 //!
 //! Compaction is the process of de-duplicating/removing entries
 //! and/or older-versions from an index snapshots (aka instance). In `robt`
-//! there are three types of compaction. The nature of compaction is captured
-//! in the [mkit::db::Cutoff] type.
+//! compaction operation consumes the `Index` instance and creates a new
+//! a new `Index` instance with its entries compacted to the desired level
+//! of `cutoff`. There are three types of compaction:
 //!
 //! _deduplication_
 //!
@@ -170,8 +171,8 @@
 //! mutations older values gets duplicated. This requires a periodic clean up
 //! of garbage values to reduce disk foot-print.
 //!
-//! This is type of compaction is also applicable for index instances that
-//! do not need distributed [LSM]. In such cases, the oldest-level's snapshot
+//! This type of compaction is also applicable for index instances that
+//! do not need distributed [LSM]. In such cases, the oldest snapshot
 //! can compact away older versions of each entry and purge entries that are
 //! marked deleted.
 //!
@@ -185,6 +186,8 @@
 //! To facilitate such designs, in lsm mode, even the root level at any given
 //! node, can retain older versions upto a specified `seqno`, that `seqno` is
 //! computed through eventual consistency.
+//!
+//! Another use case of lsm-compaction is to maintain older versions of value.
 //!
 //! _tombstone-compaction_
 //!

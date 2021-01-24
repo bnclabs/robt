@@ -169,17 +169,14 @@ impl<K, V, D> Entry<K, V, D> {
         };
 
         let prefix = prefix.to_string() + "  ";
-        match entries {
-            Some(entries) => {
-                for entry in entries.into_iter() {
-                    let entry = match &mut reader.vlog {
-                        Some(vlog) => entry.into_native(vlog, true)?,
-                        None => entry,
-                    };
-                    entry.print(prefix.as_str(), reader)?;
-                }
+        if let Some(entries) = entries {
+            for entry in entries.into_iter() {
+                let entry = match &mut reader.vlog {
+                    Some(vlog) => entry.into_native(vlog, true)?,
+                    None => entry,
+                };
+                entry.print(prefix.as_str(), reader)?;
             }
-            None => (),
         }
 
         Ok(())

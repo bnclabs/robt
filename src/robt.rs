@@ -372,8 +372,8 @@ impl<K, V, D, B> Index<K, V, D, B> {
         let reader = Reader::from_root(root, &stats, index, vlog)?;
 
         let val = Index {
-            dir: dir,
-            name: name.to_string(),
+            dir,
+            name,
 
             reader,
             metas: Arc::new(metas),
@@ -390,8 +390,8 @@ impl<K, V, D, B> Index<K, V, D, B> {
         self.bitmap = Arc::new(bitmap)
     }
 
-    /// Clone this index instance, with its underlying meta-data shared.
-    /// Note that file-descriptors are not shared.
+    /// Clone this index instance, with its underlying meta-data `shared`
+    /// across index instances. Note that file-descriptors are not `shared`.
     pub fn try_clone(&self) -> Result<Self>
     where
         K: FromCbor,
@@ -439,13 +439,12 @@ impl<K, V, D, B> Index<K, V, D, B> {
         Ok(val)
     }
 
-    /// Compact this index into a new index specified by `name`, under `dir`.
-    /// `bitmap` argument carry same meaning as that of `build_index` method.
-    /// Refer to package documentation to know more about `Cutoff`.
+    /// Compact this index into a new index specified by [Config].
+    /// The `bitmap` argument carry same meaning as that of `build_index`
+    /// method. Refer to package documentation to know more about `Cutoff`.
     pub fn compact(
         mut self,
-        dir: &ffi::OsStr,
-        name: &str,
+        config: Config,
         bitmap: B,
         cutoff: db::Cutoff,
     ) -> Result<Self>
@@ -455,26 +454,16 @@ impl<K, V, D, B> Index<K, V, D, B> {
         D: Clone + FromCbor + IntoCbor,
         B: Bloom,
     {
-        let config = {
-            let mut config: Config = self.stats.clone().into();
-            config.dir = dir.to_os_string();
-            config.name = name.to_string();
-            config
-        };
-
         let mut builder = {
             let app_meta = self.to_app_metadata();
-            Builder::<K, V, D>::initial(config, app_meta)?
+            Builder::<K, V, D>::initial(config.clone(), app_meta)?
         };
         let r = (Bound::<K>::Unbounded, Bound::<K>::Unbounded);
         let iter = CompactScan::new(self.iter(r)?.map(|e| e.unwrap()), cutoff);
-        <Builder<K, V, D> as BuildIndex<K, V, D, B>>::build_index(
-            &mut builder,
-            iter,
-            bitmap,
-        )?;
 
-        Index::open(dir, name)
+        builder.build_index(iter, bitmap)?;
+
+        Index::open(&config.dir, &config.name)
     }
 
     /// Close this index, releasing OS resources. To purge, call `purge()`
@@ -675,20 +664,25 @@ impl<K, V, D, B> Index<K, V, D, B> {
         println!("  n_abytes     : {}", stats.n_abytes);
         println!("  build_time   : {}", stats.build_time);
         println!("  epoch        : {}", stats.epoch);
-        println!("");
+        println!();
         self.reader.print()
     }
 }
 
 fn find_index_file(dir: &ffi::OsStr, name: &str) -> Option<ffi::OsString> {
     let iter = fs::read_dir(dir).ok()?;
-    let entry = iter
-        .filter_map(|entry| entry.ok())
-        .find(
-            |entry| matches!(String::try_from(IndexFileName(entry.file_name())), Ok(nm) if nm == name)
-        );
+    let entry = iter.filter_map(|entry| entry.ok()).find(|entry| {
+        let filen = IndexFileName(entry.file_name());
+        matches!(String::try_from(filen), Ok(nm) if nm == name)
+    });
 
-    entry.map(|entry| entry.file_name())
+    entry.map(|entry| {
+        let file_path: path::PathBuf =
+            [dir.to_os_string(), IndexFileName(entry.file_name()).into()]
+                .iter()
+                .collect();
+        file_path.as_os_str().to_os_string()
+    })
 }
 
 fn purge_file(file: ffi::OsString) -> Result<()> {

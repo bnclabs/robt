@@ -8,7 +8,7 @@ fn test_index_file() {
         index_file.0,
         AsRef::<ffi::OsStr>::as_ref("test-index-robt.indx").to_os_string()
     );
-    assert_eq!(String::try_from(index_file.clone()).unwrap(), name);
+    assert_eq!(String::try_from(index_file).unwrap(), name);
 }
 
 #[test]
@@ -19,5 +19,5 @@ fn test_vlog_file() {
         vlog_file.0,
         AsRef::<ffi::OsStr>::as_ref("test-index-robt.vlog").to_os_string()
     );
-    assert_eq!(String::try_from(vlog_file.clone()).unwrap(), name);
+    assert_eq!(String::try_from(vlog_file).unwrap(), name);
 }

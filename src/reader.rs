@@ -21,21 +21,14 @@ pub struct Reader<K, V, D> {
 
 impl<K, V, D> Drop for Reader<K, V, D> {
     fn drop(&mut self) {
-        match self.index.unlock() {
-            Err(err) => error!(
-                target: "robt", "fail to unlock reader lock for index: {}", err
-            ),
-            _ => (),
-        };
-        match self.vlog.as_ref() {
-            Some(vlog) => match vlog.unlock() {
-                Err(err) => error!(
-                    target: "robt", "fail to unlock reader lock for vlog: {}", err
-                ),
-                _ => (),
-            },
-            None => (),
-        };
+        if let Err(err) = self.index.unlock() {
+            error!( target: "robt", "fail to unlock reader lock for index: {}", err)
+        }
+        if let Some(vlog) = self.vlog.as_ref() {
+            if let Err(err) = vlog.unlock() {
+                error!(target: "robt", "fail to unlock reader lock for vlog: {}", err)
+            }
+        }
     }
 }
 
@@ -58,9 +51,8 @@ where
         };
 
         err_at!(IOError, index.lock_shared())?;
-        match vlog.as_ref() {
-            Some(vlog) => err_at!(IOError, vlog.lock_shared())?,
-            None => (),
+        if let Some(vlog) = vlog.as_ref() {
+            err_at!(IOError, vlog.lock_shared())?
         }
 
         Ok(Reader {

@@ -27,38 +27,54 @@ where
 use ppom::Mdb;
 
 #[cfg(test)]
-pub fn load_index(seed: u128, diff: bool, n: usize, dels: usize) -> Mdb<u16, u64, u64> {
+pub fn load_index(seed: u128, diff: bool, inserts: u64, dels: u64) -> Mdb<u16, u64, u64> {
     use rand::{rngs::SmallRng, Rng, SeedableRng};
 
     let mut rng = SmallRng::from_seed(seed.to_le_bytes());
     let index = Mdb::new("testing");
 
-    for _i in 0..n {
+    let (mut i, mut d) = (inserts, dels);
+    while (i + d) > 0 {
         let key: u16 = rng.gen();
         let value: u64 = rng.gen();
-        match diff {
-            true => index.insert(key, value).ok().map(|_| ()),
-            false => index.set(key, value).ok().map(|_| ()),
-        };
-        // println!("{} {}", _i, key);
-    }
-
-    let mut n_deleted = dels;
-    while n_deleted > 0 {
-        let key: u16 = rng.gen();
-        match index.get(&key) {
-            Ok(entry) if !entry.is_deleted() => {
-                n_deleted -= 1;
-                match diff {
-                    true => index.delete(&key).unwrap(),
-                    false => index.remove(&key).unwrap(),
-                };
+        // println!("{} {}", (i + d), key);
+        match rng.gen::<u64>() % (i + d) {
+            k if k < i && diff => {
+                index.insert(key, value).ok();
+                i -= 1;
             }
-            _ => (),
+            k if k < i => {
+                index.set(key, value).ok();
+                i -= 1;
+            }
+            _ => match index.get(&key) {
+                Ok(entry) if !entry.is_deleted() && diff => {
+                    index.delete(&key).unwrap();
+                    d -= 1;
+                }
+                Ok(entry) if !entry.is_deleted() => {
+                    index.remove(&key).unwrap();
+                    d -= 1;
+                }
+                _ => (),
+            },
         }
     }
 
-    assert_eq!(dels, index.deleted_count());
+    if diff {
+        let n_deleted: u64 = index
+            .iter()
+            .unwrap()
+            .map(|e| {
+                e.to_values()
+                    .into_iter()
+                    .filter(|v| v.is_deleted())
+                    .map(|_| 1_u64)
+                    .sum::<u64>()
+            })
+            .sum();
+        assert_eq!(n_deleted, dels);
+    }
 
     index
 }

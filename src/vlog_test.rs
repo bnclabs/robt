@@ -22,10 +22,7 @@ fn test_value() {
     );
 
     let mut buf = io::Cursor::new(buf);
-    assert_eq!(
-        value.into_native(&mut buf).unwrap(),
-        Value::from(dbval.clone())
-    );
+    assert_eq!(value.into_native(&mut buf).unwrap(), Value::from(dbval));
 }
 
 #[test]
@@ -50,8 +47,5 @@ fn test_delta() {
     );
 
     let mut buf = io::Cursor::new(buf);
-    assert_eq!(
-        delta.into_native(&mut buf).unwrap(),
-        Delta::from(dbdelta.clone())
-    );
+    assert_eq!(delta.into_native(&mut buf).unwrap(), Delta::from(dbdelta));
 }

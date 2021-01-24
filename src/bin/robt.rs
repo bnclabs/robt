@@ -1,4 +1,4 @@
-use mkit::{cbor::FromCbor, db::Bloom, NoBitmap};
+use mkit::{cbor::FromCbor, db::Bloom, nobitmap::NoBitmap};
 use structopt::StructOpt;
 
 use std::{ffi, fmt};
