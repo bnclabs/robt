@@ -26,7 +26,7 @@ fn test_build_nodiff_nobit() {
     };
     println!(
         "test_build_init_nodiff_nobit index file {:?}",
-        config.to_index_file_name()
+        config.to_index_file_location()
     );
 
     let mdb: Mdb<u16, u64, u64> = util::load_index(seed, false, 1_000_000, 100);
@@ -37,7 +37,7 @@ fn test_build_nodiff_nobit() {
 
     let index = {
         let dir = dir.as_os_str();
-        open_index::<NoBitmap>(dir, name, &config.to_index_file_name(), seed)
+        open_index::<NoBitmap>(dir, name, &config.to_index_file_location(), seed)
     };
     assert_eq!(index.to_name(), name.to_string());
     assert_eq!(index.to_app_metadata(), app_meta_data);

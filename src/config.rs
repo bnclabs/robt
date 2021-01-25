@@ -130,11 +130,11 @@ impl Config {
 }
 
 impl Config {
-    pub fn to_index_file_name(&self) -> ffi::OsString {
+    pub fn to_index_file_location(&self) -> ffi::OsString {
         to_index_file(&self.dir, &self.name)
     }
 
-    pub fn to_vlog_file_name(&self) -> ffi::OsString {
+    pub fn to_vlog_file_location(&self) -> ffi::OsString {
         to_vlog_file(&self.dir, &self.name)
     }
 }

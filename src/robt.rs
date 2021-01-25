@@ -534,6 +534,26 @@ impl<K, V, D, B> Index<K, V, D, B> {
         self.len() == 0
     }
 
+    pub fn to_index_file_location(&self) -> ffi::OsString {
+        let config: Config = self.stats.clone().into();
+        config.to_index_file_location()
+    }
+
+    pub fn to_vlog_file_location(&self) -> Option<ffi::OsString> {
+        match &self.stats.vlog_file {
+            Some(vlog_file) => {
+                let loc: path::PathBuf = [
+                    self.dir.clone(),
+                    path::Path::new(vlog_file).file_name()?.into(),
+                ]
+                .iter()
+                .collect();
+                Some(loc.into())
+            }
+            None => None,
+        }
+    }
+
     pub fn get<Q>(&mut self, key: &Q) -> Result<db::Entry<K, V, D>>
     where
         K: Clone + Borrow<Q> + FromCbor,
