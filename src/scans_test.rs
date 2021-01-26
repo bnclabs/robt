@@ -12,8 +12,8 @@ fn test_build_scan() {
     println!("test_build_scan {}", seed);
     let mut rng = SmallRng::from_seed(seed.to_le_bytes());
 
-    let n = 1_000_000;
-    let mdb = util::load_index(seed, true, n, 1_000);
+    let inserts = 1_000_000;
+    let mdb = util::load_index(seed, 0, inserts, 0, 1_000);
 
     let start_seqno = rng.gen::<u64>() % ((mdb.len() as u64) * 2);
     let mut iter = BuildScan::new(mdb.iter().unwrap(), start_seqno);
@@ -45,8 +45,8 @@ fn test_nobitmap_scan() {
     println!("test_nobitmap_scan {}", seed);
     let mut rng = SmallRng::from_seed(seed.to_le_bytes());
 
-    let n = 1_000_000;
-    let mdb = util::load_index(seed, true, n, 1_000);
+    let inserts = 1_000_000;
+    let mdb = util::load_index(seed, 0, inserts, 0, 1_000);
 
     // with NoBitmap
     let mut iter = BitmappedScan::new(mdb.iter().unwrap(), NoBitmap);
@@ -72,8 +72,8 @@ fn test_xorfilter_scan() {
     println!("test_xorfilter_scan {}", seed);
     let mut rng = SmallRng::from_seed(seed.to_le_bytes());
 
-    let n = 1_000_000;
-    let mdb = util::load_index(seed, true, n, 1_000);
+    let inserts = 1_000_000;
+    let mdb = util::load_index(seed, 0, inserts, 0, 1_000);
 
     // with xorfilter
     let mut iter = BitmappedScan::new(mdb.iter().unwrap(), Xor8::new());
