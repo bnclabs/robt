@@ -4,15 +4,16 @@ use ppom::Mdb;
 use rand::{prelude::random, rngs::SmallRng, Rng, SeedableRng};
 use xorfilter::Xor8;
 
-use std::{cmp::Ordering, thread};
+use std::thread;
 
 use super::*;
 
 #[test]
 fn test_robt_read() {
     let seed: u128 = random();
-    let seed: u128 = 113769300070107559875811256583873123132;
+    // let seed: u128 = 310536732434209035545903276086275722861;
     println!("test_robt_read {}", seed);
+    let mut rng = SmallRng::from_seed(seed.to_le_bytes());
 
     // initial build
 
@@ -40,88 +41,98 @@ fn test_robt_read() {
         ("diff", "xor"),
     ];
 
-    let n = 1_000_000;
+    let n_sets = 500_000;
+    let n_inserts = 500_000;
+    let n_dels = 10_000;
+    let n_rems = 10_000;
+    let n_threads = 2;
     for (diff, bitmap) in testcases.iter() {
+        println!("test_robt_read {} {}", diff, bitmap);
+        let mut config = config.clone();
+        config.value_in_vlog = rng.gen();
+        config.delta_ok = rng.gen();
         let handles = match (*diff, *bitmap) {
             ("nodiff", "nobitmap") => {
-                let mdb = util::load_index(seed, 100_000, 0, 100, 0);
+                let mdb =
+                    util::load_index(seed, n_sets + n_inserts, 0, n_dels + n_rems, 0);
 
                 let appmd = "test_robt_read-metadata".as_bytes().to_vec();
                 let mut build = Builder::initial(config.clone(), appmd.clone()).unwrap();
                 build.build_index(mdb.iter().unwrap(), NoBitmap).unwrap();
 
                 let mut handles = vec![];
-                for _i in 0..16 {
-                    let (dir, name) = (dir.clone().into_os_string(), name.to_string());
-                    let (config, mdb) = (config.clone(), mdb.clone());
+                for i in 0..n_threads {
+                    let (cnf, mdb, appmd) = (config.clone(), mdb.clone(), appmd.clone());
                     handles.push(thread::spawn(move || {
-                        run_test_robt::<NoBitmap>(seed, dir, name, config, mdb)
+                        run_test_robt::<NoBitmap>(i, seed, cnf, mdb, appmd)
                     }));
                 }
                 handles
             }
             ("nodiff", "xor") => {
-                let mdb = util::load_index(seed, 100_000, 0, 100, 0);
+                let mdb =
+                    util::load_index(seed, n_sets + n_inserts, 0, n_dels + n_rems, 0);
 
                 let appmd = "test_robt_read-metadata".as_bytes().to_vec();
                 let mut build = Builder::initial(config.clone(), appmd.clone()).unwrap();
                 build.build_index(mdb.iter().unwrap(), Xor8::new()).unwrap();
 
                 let mut handles = vec![];
-                for _i in 0..16 {
-                    let (dir, name) = (dir.clone().into_os_string(), name.to_string());
-                    let (config, mdb) = (config.clone(), mdb.clone());
+                for i in 0..n_threads {
+                    let (cnf, mdb, appmd) = (config.clone(), mdb.clone(), appmd.clone());
                     handles.push(thread::spawn(move || {
-                        run_test_robt::<Xor8>(seed, dir, name, config, mdb)
+                        run_test_robt::<Xor8>(i, seed, cnf, mdb, appmd)
                     }));
                 }
                 handles
             }
             ("diff", "nobitmap") => {
-                let mdb = util::load_index(seed, 100_000, 0, 100, 0);
+                let mdb = util::load_index(seed, n_sets, n_inserts, n_dels, n_rems);
 
                 let appmd = "test_robt_read-metadata".as_bytes().to_vec();
                 let mut build = Builder::initial(config.clone(), appmd.clone()).unwrap();
                 build.build_index(mdb.iter().unwrap(), NoBitmap).unwrap();
 
                 let mut handles = vec![];
-                for _i in 0..16 {
-                    let (dir, name) = (dir.clone().into_os_string(), name.to_string());
-                    let (config, mdb) = (config.clone(), mdb.clone());
+                for i in 0..n_threads {
+                    let (cnf, mdb, appmd) = (config.clone(), mdb.clone(), appmd.clone());
                     handles.push(thread::spawn(move || {
-                        run_test_robt::<NoBitmap>(seed, dir, name, config, mdb)
+                        run_test_robt::<NoBitmap>(i, seed, cnf, mdb, appmd)
                     }));
                 }
                 handles
             }
             ("diff", "xor") => {
-                let mdb = util::load_index(seed, 100_000, 0, 100, 0);
+                let mdb = util::load_index(seed, n_sets, n_inserts, n_dels, n_rems);
 
                 let appmd = "test_robt_read-metadata".as_bytes().to_vec();
                 let mut build = Builder::initial(config.clone(), appmd.clone()).unwrap();
                 build.build_index(mdb.iter().unwrap(), Xor8::new()).unwrap();
 
                 let mut handles = vec![];
-                for _i in 0..16 {
-                    let (dir, name) = (dir.clone().into_os_string(), name.to_string());
-                    let (config, mdb) = (config.clone(), mdb.clone());
+                for i in 0..n_threads {
+                    let (cnf, mdb, appmd) = (config.clone(), mdb.clone(), appmd.clone());
                     handles.push(thread::spawn(move || {
-                        run_test_robt::<Xor8>(seed, dir, name, config, mdb)
+                        run_test_robt::<Xor8>(i, seed, cnf, mdb, appmd)
                     }));
                 }
                 handles
             }
             (_, _) => unreachable!(),
         };
+
+        for handle in handles.into_iter() {
+            handle.join().unwrap();
+        }
     }
 }
 
 fn run_test_robt<B>(
+    id: usize,
     seed: u128,
-    dir: ffi::OsString,
-    name: String,
     config: Config,
     mdb: Mdb<u16, u64, u64>,
+    app_meta_data: Vec<u8>,
 ) where
     B: Bloom,
 {
@@ -130,75 +141,134 @@ fn run_test_robt<B>(
     let mut rng = SmallRng::from_seed(seed.to_le_bytes());
 
     let mut index = {
-        let dir = dir.as_os_str();
+        let dir = config.dir.as_os_str();
         let file = config.to_index_file_location();
-        open_index::<B>(dir, &name, &file, seed)
+        open_index::<B>(dir, &config.name, &file, seed)
     };
 
-    let bytes = rng.gen::<[u8; 32]>();
-    let mut uns = Unstructured::new(&bytes);
-
-    let mut counts = [0_usize; 14];
-    let n = 1_000
+    let mut counts = [0_usize; 8];
+    let n = 1000;
 
     for _i in 0..n {
         let bytes = rng.gen::<[u8; 32]>();
         let mut uns = Unstructured::new(&bytes);
 
-        let op: Op<u64> = uns.arbitrary().unwrap();
+        let op: Op<u16> = uns.arbitrary().unwrap();
+        // println!("{}-op -- {:?}", id, op);
         match op.clone() {
-            Op::Mo(meta_op) => match meta_op {
-                Name => assert_eq!(index.to_name(), name.to_string()),
-                Stats => {
-                    let stats = index.to_stats();
-                    validate_stats(&stats, &config, None, None, None, 100100, 0);
+            Op::Mo(meta_op) => {
+                use MetaOp::*;
+
+                counts[0] += 1;
+                match meta_op {
+                    Name => assert_eq!(index.to_name(), config.name.clone()),
+                    Stats => {
+                        let stats = index.to_stats();
+                        validate_stats(&stats, &config, None, None, None, 1020000, 0);
+                    }
+                    AppMetadata => assert_eq!(index.to_app_metadata(), app_meta_data),
+                    Seqno => assert_eq!(index.to_seqno(), mdb.to_seqno()),
+                    IsCompacted => assert_eq!(index.is_compacted(), true),
+                    Len => assert_eq!(index.len(), mdb.len()),
+                    IsEmpty => assert_eq!(index.is_empty(), false),
+                    _ => (),
                 }
-                AppMetadata => assert_eq!(index.to_app_metadata(), app_meta_data),
-                Seqno => assert_eq!(index.to_seqno(), mdb.to_seqno()),
-                IsCompacted => assert_eq!(index.is_compacted(), true),
-                Len => assert_eq!(index.len(), mdb.len()),
-                IsEmpty => assert_eq!(index.is_empty(), false),
-            },
+            }
             Op::Get(key) => {
+                counts[1] += 1;
                 match (index.get(&key), mdb.get(&key)) {
+                    (Ok(e1), Ok(mut e2)) => {
+                        e2.deltas = vec![];
+                        assert_eq!(e1, e2);
+                    }
+                    (Err(KeyNotFound(_, _)), Err(ppom::Error::KeyNotFound(_, _))) => (),
+                    (Err(err1), Err(err2)) => panic!("{} != {}", err1, err2),
+                    (Ok(e), Err(err)) => panic!("{:?} != {}", e, err),
+                    (Err(err), Ok(e)) => panic!("{} != {:?}", err, e),
+                }
+            }
+            Op::GetVersions(key) if config.delta_ok == false => {
+                counts[1] += 1;
+                match (index.get(&key), mdb.get(&key)) {
+                    (Ok(e1), Ok(mut e2)) => {
+                        e2.deltas = vec![];
+                        assert_eq!(e1, e2);
+                    }
+                    (Err(KeyNotFound(_, _)), Err(ppom::Error::KeyNotFound(_, _))) => (),
+                    (Err(err1), Err(err2)) => panic!("{} != {}", err1, err2),
+                    (Ok(e), Err(err)) => panic!("{:?} != {}", e, err),
+                    (Err(err), Ok(e)) => panic!("{} != {:?}", err, e),
+                }
+            }
+            Op::GetVersions(key) => {
+                counts[2] += 1;
+                match (index.get_versions(&key), mdb.get(&key)) {
                     (Ok(e1), Ok(e2)) => assert_eq!(e1, e2),
                     (Err(KeyNotFound(_, _)), Err(ppom::Error::KeyNotFound(_, _))) => (),
                     (Err(err1), Err(err2)) => panic!("{} != {}", err1, err2),
                     (Ok(e), Err(err)) => panic!("{:?} != {}", e, err),
                     (Err(err), Ok(e)) => panic!("{} != {:?}", err, e),
                 }
-                counts[8] += 1;
             }
-            Op::Iter((l, h)) => {
-                counts[9] += 1;
-                let _: Vec<Entry> = index.iter().unwrap().collect();
-                (0, 0)
-            }
-            Op::Reverse((l, h)) => {
-                counts[11] += 1;
-                let r = (Bound::from(l), Bound::from(h));
-                let _: Vec<Entry> = index.reverse(r).unwrap().collect();
-                (0, 0)
-            }
-            Op::IterVersions((l, h)) => {
-                counts[9] += 1;
-                let _: Vec<Entry> = index.iter().unwrap().collect();
-                (0, 0)
-            }
-            Op::ReverseVersions((l, h)) if asc_range(&l, &h) => {
-                counts[11] += 1;
-                let r = (Bound::from(l), Bound::from(h));
-                let _: Vec<Entry> = index.reverse(r).unwrap().collect();
-                (0, 0)
+            Op::IterOp(iter_op) => {
+                use IterOp::*;
+
+                match iter_op {
+                    Iter((l, h)) => {
+                        counts[3] += 1;
+                        let r = (Bound::from(l), Bound::from(h));
+                        let mut iter1 = mdb.range(r.clone()).unwrap();
+                        let mut iter2 = index.iter(r).unwrap();
+                        while let Some(mut e1) = iter1.next() {
+                            e1.deltas = vec![];
+                            assert_eq!(e1, iter2.next().unwrap().unwrap())
+                        }
+                        assert!(iter1.next().is_none());
+                        assert!(iter2.next().is_none());
+                    }
+                    Reverse((l, h)) => {
+                        counts[4] += 1;
+                        let r = (Bound::from(l), Bound::from(h));
+                        let mut iter1 = mdb.reverse(r.clone()).unwrap();
+                        let mut iter2 = index.reverse(r).unwrap();
+                        while let Some(mut e1) = iter1.next() {
+                            e1.deltas = vec![];
+                            assert_eq!(e1, iter2.next().unwrap().unwrap())
+                        }
+                        assert!(iter1.next().is_none());
+                        assert!(iter2.next().is_none());
+                    }
+                    IterVersions((l, h)) => {
+                        counts[5] += 1;
+                        let r = (Bound::from(l), Bound::from(h));
+                        let mut iter1 = mdb.range(r.clone()).unwrap();
+                        let mut iter2 = index.iter_versions(r).unwrap();
+                        while let Some(e1) = iter1.next() {
+                            assert_eq!(e1, iter2.next().unwrap().unwrap())
+                        }
+                        assert!(iter1.next().is_none());
+                        assert!(iter2.next().is_none());
+                    }
+                    ReverseVersions((l, h)) => {
+                        counts[6] += 1;
+                        let r = (Bound::from(l), Bound::from(h));
+                        let mut iter1 = mdb.reverse(r.clone()).unwrap();
+                        let mut iter2 = index.reverse_versions(r).unwrap();
+                        while let Some(e1) = iter1.next() {
+                            assert_eq!(e1, iter2.next().unwrap().unwrap())
+                        }
+                        assert!(iter1.next().is_none());
+                        assert!(iter2.next().is_none());
+                    }
+                }
             }
             Op::Validate => {
-                counts[13] += 1;
+                counts[7] += 1;
                 index.validate().unwrap();
-                (0, 0)
             }
         };
-        // println!("{}-op -- {:?} seqno:{} cas:{}", id, op, _seqno, _cas);
     }
+    println!("{}-counts {:?}", id, counts);
 }
 
 #[test]
@@ -283,13 +353,19 @@ enum MetaOp {
 }
 
 #[derive(Clone, Debug, Arbitrary)]
-enum Op<K> {
-    Mo(MetaOp),
-    Get(K),
+enum IterOp<K> {
     Iter((Limit<K>, Limit<K>)),
     IterVersions((Limit<K>, Limit<K>)),
     Reverse((Limit<K>, Limit<K>)),
     ReverseVersions((Limit<K>, Limit<K>)),
+}
+
+#[derive(Clone, Debug, Arbitrary)]
+enum Op<K> {
+    Mo(MetaOp),
+    Get(K),
+    GetVersions(K),
+    IterOp(IterOp<K>),
     Validate,
 }
 
@@ -309,40 +385,3 @@ impl<T> From<Limit<T>> for Bound<T> {
         }
     }
 }
-
-//TODO
-//fn compare_iter<'a>(
-//    id: usize,
-//    mut index: impl Iterator<Item = Entry>,
-//    btmap: impl Iterator<Item = (&'a Ky, &'a Entry)>,
-//    frwrd: bool,
-//) {
-//    for (_key, val) in btmap {
-//        loop {
-//            let e = index.next();
-//            match e {
-//                Some(e) => match e.as_key().cmp(val.as_key()) {
-//                    Ordering::Equal => {
-//                        assert!(e.contains(&val));
-//                        break;
-//                    }
-//                    Ordering::Less if frwrd => (),
-//                    Ordering::Greater if !frwrd => (),
-//                    Ordering::Less | Ordering::Greater => {
-//                        panic!("{} error miss entry {} {}", id, e.as_key(), val.as_key())
-//                    }
-//                },
-//                None => panic!("{} error missing entry", id),
-//            }
-//        }
-//    }
-//}
-//
-//TODO
-//fn compare_old_entry(index: Option<Entry>, btmap: Option<Entry>) {
-//    match (index, btmap) {
-//        (None, None) | (Some(_), None) => (),
-//        (None, Some(btmap)) => panic!("{:?}", btmap),
-//        (Some(e), Some(x)) => assert!(e.contains(&x)),
-//    }
-//}

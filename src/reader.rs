@@ -65,7 +65,7 @@ where
         })
     }
 
-    pub fn get<Q>(&mut self, ukey: &Q) -> Result<Entry<K, V, D>>
+    pub fn get<Q>(&mut self, ukey: &Q, versions: bool) -> Result<Entry<K, V, D>>
     where
         K: Clone + Borrow<Q>,
         V: Clone,
@@ -83,18 +83,26 @@ where
                 Err(off) if off == 0 => break err_at!(KeyNotFound, msg: "missing key"),
                 Err(off) => off - 1,
             };
-            es = match &es[off] {
+            es = match es[off].clone() {
                 Entry::MM { fpos, .. } => {
-                    let fpos = io::SeekFrom::Start(*fpos);
+                    let fpos = io::SeekFrom::Start(fpos);
                     let block = read_file!(fd, fpos, m_blocksize, "read mm-block")?;
                     util::from_cbor_bytes::<Vec<Entry<K, V, D>>>(&block)?.0
                 }
                 Entry::MZ { fpos, .. } => {
-                    let fpos = io::SeekFrom::Start(*fpos);
+                    let fpos = io::SeekFrom::Start(fpos);
                     let block = read_file!(fd, fpos, z_blocksize, "read mz-block")?;
                     util::from_cbor_bytes::<Vec<Entry<K, V, D>>>(&block)?.0
                 }
-                e @ Entry::ZZ { .. } if e.borrow_key() == ukey => break Ok(e.clone()),
+                Entry::ZZ { key, value, deltas } if key.borrow() == ukey => {
+                    let deltas = if versions { deltas } else { Vec::default() };
+                    let entry = Entry::ZZ { key, value, deltas };
+                    let entry = match &mut self.vlog {
+                        Some(fd) => entry.into_native(fd, versions)?,
+                        None => entry,
+                    };
+                    break Ok(entry);
+                }
                 _ => break err_at!(KeyNotFound, msg: "missing key"),
             }
         }
@@ -107,51 +115,87 @@ where
         versions: bool,
     ) -> Result<Iter<K, V, D>>
     where
-        K: Clone + Borrow<Q>,
+        K: Clone + Ord + Borrow<Q> + fmt::Debug,
         V: Clone,
         D: Clone,
         Q: Ord + ToOwned<Owned = K>,
         R: RangeBounds<Q>,
     {
-        let end_bound: Bound<K> = match range.end_bound() {
-            Bound::Unbounded => Bound::Unbounded,
-            Bound::Included(q) => Bound::Included(q.to_owned()),
-            Bound::Excluded(q) => Bound::Excluded(q.to_owned()),
-        };
-        let stack = if reverse {
-            self.iter_rwd(range, self.root.clone())?
+        let (stack, bound) = if reverse {
+            let stack = self.rwd_stack(range.end_bound(), self.root.clone())?;
+            let bound: Bound<K> = match range.start_bound() {
+                Bound::Unbounded => Bound::Unbounded,
+                Bound::Included(q) => Bound::Included(q.to_owned()),
+                Bound::Excluded(q) => Bound::Excluded(q.to_owned()),
+            };
+            (stack, bound)
         } else {
-            self.iter_fwd(range, self.root.clone())?
+            let stack = self.fwd_stack(range.start_bound(), self.root.clone())?;
+            let bound: Bound<K> = match range.end_bound() {
+                Bound::Unbounded => Bound::Unbounded,
+                Bound::Included(q) => Bound::Included(q.to_owned()),
+                Bound::Excluded(q) => Bound::Excluded(q.to_owned()),
+            };
+            (stack, bound)
         };
-        let iter = Iter::new(self, end_bound, stack, reverse, versions);
+        let mut iter = Iter::new(self, bound, stack, reverse, versions);
+
+        while let Some(item) = iter.next() {
+            match item {
+                Ok(entry) if reverse => {
+                    let key = entry.borrow_key();
+                    match range.end_bound() {
+                        Bound::Included(ekey) if key.gt(ekey) => (),
+                        Bound::Excluded(ekey) if key.ge(ekey) => (),
+                        _ => {
+                            iter.push(entry);
+                            break;
+                        }
+                    }
+                }
+                Ok(entry) => {
+                    let key = entry.borrow_key();
+                    match range.start_bound() {
+                        Bound::Included(skey) if key.lt(skey) => (),
+                        Bound::Excluded(skey) if key.le(skey) => (),
+                        _ => {
+                            iter.push(entry);
+                            break;
+                        }
+                    }
+                }
+                Err(err) => return Err(err),
+            }
+        }
+
         Ok(iter)
     }
 
-    fn iter_fwd<Q, R>(
+    fn fwd_stack<Q>(
         &mut self,
-        range: R,
-        mut block: Vec<Entry<K, V, D>>,
+        sk: Bound<&Q>,
+        block: Vec<Entry<K, V, D>>,
     ) -> Result<Vec<Vec<Entry<K, V, D>>>>
     where
-        K: Clone + Borrow<Q>,
+        K: Clone + Borrow<Q> + fmt::Debug,
         V: Clone,
         D: Clone,
         Q: Ord,
-        R: RangeBounds<Q>,
     {
-        let sk = range.start_bound();
-        let z = block.first().map(|e| e.is_zblock()).unwrap_or(false);
-
-        let fr = block.binary_search_by(|e| Self::scmp(e.borrow_key(), sk, z));
-        let (entry, rem) = match fr {
-            Ok(off) if z => return Ok(vec![block[off..].to_vec()]),
-            Err(off) if z => return Ok(vec![block[off..].to_vec()]),
-            Ok(off) => (block.remove(off), block[off..].to_vec()),
-            Err(off) if off >= block.len() => return Ok(vec![]),
-            Err(off) => {
-                let off = off.saturating_sub(1);
-                (block.remove(off), block[off..].to_vec())
-            }
+        let (entry, rem) = match block.first().map(|e| e.is_zblock()) {
+            Some(false) => match block.binary_search_by(|e| fcmp(e.borrow_key(), sk)) {
+                Ok(off) => (block[off].clone(), block[off + 1..].to_vec()),
+                Err(off) => {
+                    let off = off.saturating_sub(1);
+                    (block[off].clone(), block[off + 1..].to_vec())
+                }
+            },
+            Some(true) => match block.binary_search_by(|e| fcmp(e.borrow_key(), sk)) {
+                Ok(off) | Err(off) => {
+                    return Ok(vec![block[off..].to_vec()]);
+                }
+            },
+            None => return Ok(vec![]),
         };
 
         let fd = &mut self.index;
@@ -160,50 +204,50 @@ where
 
         let block = match entry {
             Entry::MM { fpos, .. } => {
-                let fpos = io::SeekFrom::Start(fpos);
-                read_file!(fd, fpos, m_blocksize, "read mm-block")?
+                read_file!(fd, io::SeekFrom::Start(fpos), m_blocksize, "read mm-block")?
             }
             Entry::MZ { fpos, .. } => {
-                let fpos = io::SeekFrom::Start(fpos);
-                read_file!(fd, fpos, z_blocksize, "read mz-block")?
+                read_file!(fd, io::SeekFrom::Start(fpos), z_blocksize, "read mz-block")?
             }
             _ => unreachable!(),
         };
 
         let block = util::from_cbor_bytes::<Vec<Entry<K, V, D>>>(&block)?.0;
-        let mut stack = self.iter_fwd(range, block)?;
+        let mut stack = self.fwd_stack(sk, block)?;
         stack.insert(0, rem);
         Ok(stack)
     }
 
-    fn iter_rwd<Q, R>(
+    fn rwd_stack<Q>(
         &mut self,
-        range: R,
-        mut block: Vec<Entry<K, V, D>>,
+        ek: Bound<&Q>,
+        block: Vec<Entry<K, V, D>>,
     ) -> Result<Vec<Vec<Entry<K, V, D>>>>
     where
-        K: Clone + Borrow<Q>,
+        K: Clone + Borrow<Q> + fmt::Debug,
         V: Clone,
         D: Clone,
         Q: Ord,
-        R: RangeBounds<Q>,
     {
-        block.reverse();
-
-        let sk = range.end_bound();
-        let z = block.first().map(|e| e.is_zblock()).unwrap_or(false);
-
-        let fr = block.binary_search_by(|e| Self::scmp(e.borrow_key(), sk, z));
-        let (entry, rem) = match fr {
-            Ok(off) if z => return Ok(vec![block[off..].to_vec()]),
-            Err(off) if z => return Ok(vec![block[off..].to_vec()]),
-            Ok(off) => (block.remove(off), block[off..].to_vec()),
-            Err(off) if off >= block.len() => return Ok(vec![]),
-            Err(off) => {
-                let off = off.saturating_sub(1);
-                (block.remove(off), block[off..].to_vec())
-            }
+        let (entry, mut rem) = match block.first().map(|e| e.is_zblock()) {
+            Some(false) => match block.binary_search_by(|e| rcmp(e.borrow_key(), ek)) {
+                Ok(off) => (block[off].clone(), block[..off].to_vec()),
+                Err(off) => {
+                    let off = off.saturating_sub(1);
+                    (block[off].clone(), block[..off].to_vec())
+                }
+            },
+            Some(true) => match block.binary_search_by(|e| rcmp(e.borrow_key(), ek)) {
+                Ok(off) | Err(off) => {
+                    let off = cmp::min(off + 1, block.len());
+                    let mut rem = block[..off].to_vec();
+                    rem.reverse();
+                    return Ok(vec![rem]);
+                }
+            },
+            None => return Ok(vec![]),
         };
+        rem.reverse();
 
         let fd = &mut self.index;
         let m_blocksize = self.m_blocksize;
@@ -211,35 +255,18 @@ where
 
         let block = match entry {
             Entry::MM { fpos, .. } => {
-                let fpos = io::SeekFrom::Start(fpos);
-                read_file!(fd, fpos, m_blocksize, "read mm-block")?
+                read_file!(fd, io::SeekFrom::Start(fpos), m_blocksize, "read mm-block")?
             }
             Entry::MZ { fpos, .. } => {
-                let fpos = io::SeekFrom::Start(fpos);
-                read_file!(fd, fpos, z_blocksize, "read mz-block")?
+                read_file!(fd, io::SeekFrom::Start(fpos), z_blocksize, "read mz-block")?
             }
             _ => unreachable!(),
         };
 
         let block = util::from_cbor_bytes::<Vec<Entry<K, V, D>>>(&block)?.0;
-        let mut stack = self.iter_fwd(range, block)?;
+        let mut stack = self.rwd_stack(ek, block)?;
         stack.insert(0, rem);
         Ok(stack)
-    }
-
-    fn scmp<Q>(key: &Q, skey: Bound<&Q>, z: bool) -> cmp::Ordering
-    where
-        Q: Ord,
-    {
-        match skey {
-            Bound::Unbounded => cmp::Ordering::Greater,
-            Bound::Included(skey) => key.cmp(skey),
-            Bound::Excluded(skey) if z => match key.cmp(skey) {
-                cmp::Ordering::Equal => cmp::Ordering::Less,
-                c => c,
-            },
-            Bound::Excluded(skey) => key.cmp(skey),
-        }
     }
 
     pub fn print(&mut self) -> Result<()>
@@ -260,7 +287,8 @@ pub struct Iter<'a, K, V, D> {
     stack: Vec<Vec<Entry<K, V, D>>>,
     reverse: bool,
     versions: bool,
-    end_bound: Bound<K>,
+    entry: Option<db::Entry<K, V, D>>,
+    bound: Bound<K>,
 
     _key: marker::PhantomData<K>,
     _val: marker::PhantomData<V>,
@@ -269,7 +297,7 @@ pub struct Iter<'a, K, V, D> {
 impl<'a, K, V, D> Iter<'a, K, V, D> {
     fn new(
         r: &'a mut Reader<K, V, D>,
-        end_bound: Bound<K>,
+        bound: Bound<K>,
         stack: Vec<Vec<Entry<K, V, D>>>,
         reverse: bool,
         versions: bool,
@@ -279,11 +307,16 @@ impl<'a, K, V, D> Iter<'a, K, V, D> {
             stack,
             reverse,
             versions,
-            end_bound,
+            entry: None,
+            bound,
 
             _key: marker::PhantomData,
             _val: marker::PhantomData,
         }
+    }
+
+    fn push(&mut self, entry: db::Entry<K, V, D>) {
+        self.entry = Some(entry);
     }
 
     fn till(&mut self, e: db::Entry<K, V, D>) -> Option<Result<db::Entry<K, V, D>>>
@@ -292,26 +325,40 @@ impl<'a, K, V, D> Iter<'a, K, V, D> {
     {
         let key = &e.key;
 
-        match &self.end_bound {
-            Bound::Unbounded => Some(Ok(e)),
-            Bound::Included(till) if self.reverse && key.ge(till) => Some(Ok(e)),
-            Bound::Excluded(till) if self.reverse && key.gt(till) => Some(Ok(e)),
-            Bound::Included(till) if key.le(till) => Some(Ok(e)),
-            Bound::Excluded(till) if key.lt(till) => Some(Ok(e)),
-            _ => {
-                self.stack.drain(..);
-                None
+        if self.reverse {
+            match &self.bound {
+                Bound::Unbounded => Some(Ok(e)),
+                Bound::Included(till) if key.ge(till) => Some(Ok(e)),
+                Bound::Excluded(till) if key.gt(till) => Some(Ok(e)),
+                _ => {
+                    self.stack.drain(..);
+                    None
+                }
+            }
+        } else {
+            match &self.bound {
+                Bound::Unbounded => Some(Ok(e)),
+                Bound::Included(till) if key.le(till) => Some(Ok(e)),
+                Bound::Excluded(till) if key.lt(till) => Some(Ok(e)),
+                _ => {
+                    self.stack.drain(..);
+                    None
+                }
             }
         }
     }
 
-    fn fetchzz(&mut self, entry: Entry<K, V, D>) -> Result<Entry<K, V, D>>
+    fn fetchzz(&mut self, mut entry: Entry<K, V, D>) -> Result<Entry<K, V, D>>
     where
         V: FromCbor,
         D: FromCbor,
     {
         match &mut self.reader.vlog {
-            Some(vlog) => entry.into_native(vlog, self.versions),
+            Some(fd) if self.versions => entry.into_native(fd, self.versions),
+            Some(fd) => {
+                entry.drain_deltas();
+                entry.into_native(fd, self.versions)
+            }
             None => Ok(entry),
         }
     }
@@ -326,18 +373,24 @@ where
     type Item = Result<db::Entry<K, V, D>>;
 
     fn next(&mut self) -> Option<Self::Item> {
+        match self.entry.take() {
+            Some(entry) => return Some(Ok(entry)),
+            None => (),
+        }
+
         let fd = &mut self.reader.index;
         let m_blocksize = self.reader.m_blocksize;
 
         match self.stack.pop() {
-            Some(mut es) => match es.pop() {
-                Some(entry @ Entry::ZZ { .. }) => {
+            Some(block) if block.len() == 0 => self.next(),
+            Some(mut block) => match block.remove(0) {
+                entry @ Entry::ZZ { .. } => {
+                    self.stack.push(block);
                     let entry = iter_result!(self.fetchzz(entry));
-                    self.stack.push(es);
                     self.till(entry.into())
                 }
-                Some(Entry::MM { fpos, .. }) | Some(Entry::MZ { fpos, .. }) => {
-                    self.stack.push(es);
+                Entry::MM { fpos, .. } | Entry::MZ { fpos, .. } => {
+                    self.stack.push(block);
 
                     let mut entries = iter_result!(|| -> Result<Vec<Entry<K, V, D>>> {
                         let fpos = io::SeekFrom::Start(fpos);
@@ -350,9 +403,28 @@ where
                     self.stack.push(entries);
                     self.next()
                 }
-                None => self.next(),
             },
             None => None,
         }
+    }
+}
+
+fn fcmp<Q>(key: &Q, skey: Bound<&Q>) -> cmp::Ordering
+where
+    Q: Ord,
+{
+    match skey {
+        Bound::Unbounded => cmp::Ordering::Greater,
+        Bound::Included(skey) | Bound::Excluded(skey) => key.cmp(skey),
+    }
+}
+
+fn rcmp<Q>(key: &Q, ekey: Bound<&Q>) -> cmp::Ordering
+where
+    Q: Ord,
+{
+    match ekey {
+        Bound::Unbounded => cmp::Ordering::Less,
+        Bound::Included(ekey) | Bound::Excluded(ekey) => key.cmp(ekey),
     }
 }

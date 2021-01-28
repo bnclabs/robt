@@ -60,6 +60,15 @@ impl<K, V, D> Entry<K, V, D> {
     pub fn new_mz(key: K, fpos: u64) -> Self {
         Entry::MZ { key, fpos }
     }
+
+    pub fn drain_deltas(&mut self) {
+        match self {
+            Entry::MM { .. } | Entry::MZ { .. } => (),
+            Entry::ZZ { deltas, .. } => {
+                deltas.drain(..);
+            }
+        }
+    }
 }
 
 impl<K, V, D> Entry<K, V, D> {

@@ -163,6 +163,8 @@ where
         I: Iterator<Item = db::Entry<K, V, D>>,
         D: Clone + IntoCbor,
     {
+        self.stats.n_abytes = self.vflush.as_ref().borrow().to_fpos().unwrap_or(0);
+
         let (iter, root) = self.build_tree(iter)?;
         let (build_time, seqno, n_count, n_deleted, epoch, iter) = iter.unwrap()?;
         self.root = root;
@@ -171,8 +173,6 @@ where
         self.stats.build_time = build_time;
         self.stats.epoch = epoch;
         self.stats.seqno = seqno;
-
-        self.stats.n_abytes = self.vflush.as_ref().borrow().to_fpos().unwrap_or(0);
 
         Ok(iter)
     }
@@ -449,7 +449,7 @@ impl<K, V, D, B> Index<K, V, D, B> {
         cutoff: db::Cutoff,
     ) -> Result<Self>
     where
-        K: Clone + Ord + Hash + FromCbor + IntoCbor,
+        K: Clone + Ord + Hash + FromCbor + IntoCbor + fmt::Debug,
         V: Clone + FromCbor + IntoCbor,
         D: Clone + FromCbor + IntoCbor,
         B: Bloom,
@@ -561,12 +561,24 @@ impl<K, V, D, B> Index<K, V, D, B> {
         D: Clone + FromCbor,
         Q: Ord,
     {
-        Ok(self.reader.get(key)?.into())
+        let versions = false;
+        Ok(self.reader.get(key, versions)?.into())
+    }
+
+    pub fn get_versions<Q>(&mut self, key: &Q) -> Result<db::Entry<K, V, D>>
+    where
+        K: Clone + Borrow<Q> + FromCbor,
+        V: Clone + FromCbor,
+        D: Clone + FromCbor,
+        Q: Ord,
+    {
+        let versions = true;
+        Ok(self.reader.get(key, versions)?.into())
     }
 
     pub fn iter<Q, R>(&mut self, range: R) -> Result<Iter<K, V, D>>
     where
-        K: Clone + Borrow<Q> + FromCbor,
+        K: Clone + Ord + Borrow<Q> + FromCbor + fmt::Debug,
         V: Clone + FromCbor,
         D: Clone + FromCbor,
         Q: Ord + ToOwned<Owned = K>,
@@ -578,7 +590,7 @@ impl<K, V, D, B> Index<K, V, D, B> {
 
     pub fn reverse<Q, R>(&mut self, range: R) -> Result<Iter<K, V, D>>
     where
-        K: Clone + Borrow<Q> + FromCbor,
+        K: Clone + Ord + Borrow<Q> + FromCbor + fmt::Debug,
         V: Clone + FromCbor,
         D: Clone + FromCbor,
         Q: Ord + ToOwned<Owned = K>,
@@ -590,7 +602,7 @@ impl<K, V, D, B> Index<K, V, D, B> {
 
     pub fn iter_versions<Q, R>(&mut self, range: R) -> Result<Iter<K, V, D>>
     where
-        K: Clone + Borrow<Q> + FromCbor,
+        K: Clone + Ord + Borrow<Q> + FromCbor + fmt::Debug,
         V: Clone + FromCbor,
         D: Clone + FromCbor,
         Q: Ord + ToOwned<Owned = K>,
@@ -602,7 +614,7 @@ impl<K, V, D, B> Index<K, V, D, B> {
 
     pub fn reverse_versions<Q, R>(&mut self, range: R) -> Result<Iter<K, V, D>>
     where
-        K: Clone + Borrow<Q> + FromCbor,
+        K: Clone + Ord + Borrow<Q> + FromCbor + fmt::Debug,
         V: Clone + FromCbor,
         D: Clone + FromCbor,
         Q: Ord + ToOwned<Owned = K>,
@@ -644,7 +656,7 @@ impl<K, V, D, B> Index<K, V, D, B> {
                 }
             }
 
-            prev_key.get_or_insert_with(|| entry.key.clone());
+            prev_key = Some(entry.key.clone());
         }
 
         let s = self.to_stats();
