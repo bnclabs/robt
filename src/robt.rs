@@ -134,7 +134,7 @@ where
 {
     type Err = Error;
 
-    fn build_index<I>(&mut self, iter: I, bitmap: B) -> Result<()>
+    fn build_index<I>(&mut self, iter: I, bitmap: B, seqno: Option<u64>) -> Result<()>
     where
         I: Iterator<Item = db::Entry<K, V, D>>,
     {
@@ -147,7 +147,7 @@ where
 
         let (bitmap, _) = iter.unwrap()?;
 
-        self.build_flush(err_at!(Fatal, bitmap.to_bytes())?)?;
+        self.build_flush(err_at!(Fatal, bitmap.to_bytes())?, seqno)?;
 
         Ok(())
     }
@@ -208,8 +208,8 @@ where
         Ok((Rc::try_unwrap(iter).ok().unwrap().into_inner(), root))
     }
 
-    fn build_flush(&mut self, bitmap: Vec<u8>) -> Result<(u64, u64)> {
-        let block = self.to_meta_blocks(bitmap)?;
+    fn build_flush(&mut self, bitmap: Vec<u8>, seqno: Option<u64>) -> Result<(u64, u64)> {
+        let block = self.to_meta_blocks(bitmap, seqno)?;
 
         self.iflush.borrow_mut().flush(block)?;
 
@@ -219,7 +219,8 @@ where
         Ok((len1, len2))
     }
 
-    fn to_meta_blocks(&self, bitmap: Vec<u8>) -> Result<Vec<u8>> {
+    fn to_meta_blocks(&mut self, bitmap: Vec<u8>, seqno: Option<u64>) -> Result<Vec<u8>> {
+        self.stats.seqno = seqno.unwrap_or(self.stats.seqno);
         let stats = util::into_cbor_bytes(self.stats.clone())?;
 
         let metas = vec![
@@ -461,7 +462,7 @@ impl<K, V, D, B> Index<K, V, D, B> {
         let r = (Bound::<K>::Unbounded, Bound::<K>::Unbounded);
         let iter = CompactScan::new(self.iter(r)?.map(|e| e.unwrap()), cutoff);
 
-        builder.build_index(iter, bitmap)?;
+        builder.build_index(iter, bitmap, None)?;
 
         Index::open(&config.dir, &config.name)
     }

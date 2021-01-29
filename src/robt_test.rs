@@ -22,9 +22,9 @@ fn test_robt_read() {
     let config = Config {
         dir: dir.as_os_str().to_os_string(),
         name: name.to_string(),
-        z_blocksize: 4096,
-        m_blocksize: 4096,
-        v_blocksize: 4096,
+        z_blocksize: 1024,
+        m_blocksize: 1024,
+        v_blocksize: 1024,
         delta_ok: false,
         value_in_vlog: false,
         flush_queue_size: 32,
@@ -41,11 +41,11 @@ fn test_robt_read() {
         ("diff", "xor"),
     ];
 
-    let n_sets = 500_000;
-    let n_inserts = 500_000;
-    let n_dels = 10_000;
-    let n_rems = 10_000;
-    let n_threads = 2;
+    let n_sets = 10_000;
+    let n_inserts = 10_000;
+    let n_dels = 1_000;
+    let n_rems = 1_000;
+    let n_threads = 8;
     for (diff, bitmap) in testcases.iter() {
         println!("test_robt_read {} {}", diff, bitmap);
         let mut config = config.clone();
@@ -58,7 +58,10 @@ fn test_robt_read() {
 
                 let appmd = "test_robt_read-metadata".as_bytes().to_vec();
                 let mut build = Builder::initial(config.clone(), appmd.clone()).unwrap();
-                build.build_index(mdb.iter().unwrap(), NoBitmap).unwrap();
+                let seqno = Some(mdb.to_seqno());
+                build
+                    .build_index(mdb.iter().unwrap(), NoBitmap, seqno)
+                    .unwrap();
 
                 let mut handles = vec![];
                 for i in 0..n_threads {
@@ -75,7 +78,10 @@ fn test_robt_read() {
 
                 let appmd = "test_robt_read-metadata".as_bytes().to_vec();
                 let mut build = Builder::initial(config.clone(), appmd.clone()).unwrap();
-                build.build_index(mdb.iter().unwrap(), Xor8::new()).unwrap();
+                let seqno = Some(mdb.to_seqno());
+                build
+                    .build_index(mdb.iter().unwrap(), Xor8::new(), seqno)
+                    .unwrap();
 
                 let mut handles = vec![];
                 for i in 0..n_threads {
@@ -91,7 +97,10 @@ fn test_robt_read() {
 
                 let appmd = "test_robt_read-metadata".as_bytes().to_vec();
                 let mut build = Builder::initial(config.clone(), appmd.clone()).unwrap();
-                build.build_index(mdb.iter().unwrap(), NoBitmap).unwrap();
+                let seqno = Some(mdb.to_seqno());
+                build
+                    .build_index(mdb.iter().unwrap(), NoBitmap, seqno)
+                    .unwrap();
 
                 let mut handles = vec![];
                 for i in 0..n_threads {
@@ -107,7 +116,10 @@ fn test_robt_read() {
 
                 let appmd = "test_robt_read-metadata".as_bytes().to_vec();
                 let mut build = Builder::initial(config.clone(), appmd.clone()).unwrap();
-                build.build_index(mdb.iter().unwrap(), Xor8::new()).unwrap();
+                let seqno = Some(mdb.to_seqno());
+                build
+                    .build_index(mdb.iter().unwrap(), Xor8::new(), seqno)
+                    .unwrap();
 
                 let mut handles = vec![];
                 for i in 0..n_threads {
@@ -154,7 +166,7 @@ fn run_test_robt<B>(
         let mut uns = Unstructured::new(&bytes);
 
         let op: Op<u16> = uns.arbitrary().unwrap();
-        // println!("{}-op -- {:?}", id, op);
+        // println!("{}-op {} -- {:?}", id, _i, op);
         match op.clone() {
             Op::Mo(meta_op) => {
                 use MetaOp::*;
@@ -164,7 +176,7 @@ fn run_test_robt<B>(
                     Name => assert_eq!(index.to_name(), config.name.clone()),
                     Stats => {
                         let stats = index.to_stats();
-                        validate_stats(&stats, &config, None, None, None, 1020000, 0);
+                        validate_stats(&stats, &config, None, &mdb, 0);
                     }
                     AppMetadata => assert_eq!(index.to_app_metadata(), app_meta_data),
                     Seqno => assert_eq!(index.to_seqno(), mdb.to_seqno()),
@@ -293,9 +305,7 @@ fn validate_stats(
     stats: &Stats,
     config: &Config,
     vlog_file: Option<ffi::OsString>,
-    n_count: Option<u64>,
-    n_deleted: Option<usize>,
-    seqno: u64,
+    mdb: &Mdb<u16, u64, u64>,
     n_abytes: u64,
 ) {
     assert_eq!(stats.name, config.name);
@@ -306,13 +316,9 @@ fn validate_stats(
     assert_eq!(stats.vlog_file, vlog_file);
     assert_eq!(stats.value_in_vlog, config.value_in_vlog);
 
-    if let Some(n) = n_count {
-        assert_eq!(stats.n_count, n)
-    }
-    if let Some(n) = n_deleted {
-        assert_eq!(stats.n_deleted, n)
-    }
-    assert_eq!(stats.seqno, seqno);
+    assert_eq!(stats.n_count, mdb.len() as u64);
+    assert_eq!(stats.n_deleted, mdb.deleted_count());
+    assert_eq!(stats.seqno, mdb.to_seqno());
     assert_eq!(stats.n_abytes, n_abytes);
 }
 
