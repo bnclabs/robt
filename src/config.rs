@@ -41,7 +41,7 @@ pub fn to_vlog_file(dir: &ffi::OsStr, name: &str) -> ffi::OsString {
 ///
 /// Configuration type is used only for building an index. Subsequently,
 /// configuration parameters are persisted along with the index.
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct Config {
     /// location path where index files are created.
     pub dir: ffi::OsString,

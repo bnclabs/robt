@@ -168,6 +168,7 @@ pub struct BuildZZ<K, V, D, I> {
     z_blocksize: usize,
     v_blocksize: usize,
     value_in_vlog: bool,
+    delta_ok: bool,
     iflush: Rc<RefCell<Flusher>>,
     vflush: Rc<RefCell<Flusher>>,
     iter: Rc<RefCell<BuildScan<K, V, D, I>>>,
@@ -184,6 +185,7 @@ impl<K, V, D, I> BuildZZ<K, V, D, I> {
             z_blocksize: config.z_blocksize,
             v_blocksize: config.v_blocksize,
             value_in_vlog: config.value_in_vlog,
+            delta_ok: config.delta_ok,
             iflush,
             vflush,
             iter,
@@ -214,7 +216,10 @@ where
 
         loop {
             match iter.next() {
-                Some(entry) => {
+                Some(mut entry) => {
+                    if !self.delta_ok {
+                        entry.drain_deltas()
+                    }
                     first_key.get_or_insert_with(|| entry.key.clone());
                     let (e, vbytes) = {
                         let e = Entry::<K, V, D>::from(entry.clone());

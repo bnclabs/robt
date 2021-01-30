@@ -58,7 +58,7 @@ pub struct Builder<K, V, D> {
 impl<K, V, D> Builder<K, V, D> {
     /// Build a fresh index, using configuration and snapshot specific
     /// meta-data.
-    pub fn initial(config: Config, app_meta: Vec<u8>) -> Result<Self> {
+    pub fn initial(config: Config, meta: Vec<u8>) -> Result<Self> {
         let queue_size = config.flush_queue_size;
         let iflush = {
             let file_path = to_index_file(&config.dir, &config.name);
@@ -76,7 +76,7 @@ impl<K, V, D> Builder<K, V, D> {
             iflush,
             vflush,
 
-            app_meta,
+            app_meta: meta,
             stats: config.into(),
             root: u64::default(),
 

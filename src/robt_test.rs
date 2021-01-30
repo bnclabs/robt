@@ -10,8 +10,10 @@ use super::*;
 
 #[test]
 fn test_robt_read() {
-    let seed: u128 = random();
+    let seed: u128 =
+        [random(), 315408295460649044406651951935429140111][random::<usize>() % 2];
     // let seed: u128 = 310536732434209035545903276086275722861;
+    let seed: u128 = 315408295460649044406651951935429140111;
     println!("test_robt_read {}", seed);
     let mut rng = SmallRng::from_seed(seed.to_le_bytes());
 
@@ -46,97 +48,68 @@ fn test_robt_read() {
     let n_dels = 1_000;
     let n_rems = 1_000;
     let n_threads = 8;
+
+    let appmd = "test_robt_read-metadata".as_bytes().to_vec();
+
     for (diff, bitmap) in testcases.iter() {
         println!("test_robt_read {} {}", diff, bitmap);
         let mut config = config.clone();
         config.value_in_vlog = rng.gen();
         config.delta_ok = rng.gen();
-        let handles = match (*diff, *bitmap) {
-            ("nodiff", "nobitmap") => {
-                let mdb =
-                    util::load_index(seed, n_sets + n_inserts, 0, n_dels + n_rems, 0);
+        println!("test_robt_read-config {:?}", config);
 
-                let appmd = "test_robt_read-metadata".as_bytes().to_vec();
-                let mut build = Builder::initial(config.clone(), appmd.clone()).unwrap();
-                let seqno = Some(mdb.to_seqno());
-                build
-                    .build_index(mdb.iter().unwrap(), NoBitmap, seqno)
-                    .unwrap();
+        let (s, i, r, d) = match *diff {
+            "nodiff" => (n_sets + n_inserts, 0, n_dels + n_rems, 0),
+            "diff" => (n_sets, n_inserts, n_rems, n_dels),
+            _ => unreachable!(),
+        };
+        let mdb = util::load_index(seed, s, i, r, d);
+        let seqno = Some(mdb.to_seqno());
 
-                let mut handles = vec![];
-                for i in 0..n_threads {
-                    let (cnf, mdb, appmd) = (config.clone(), mdb.clone(), appmd.clone());
-                    handles.push(thread::spawn(move || {
-                        run_test_robt::<NoBitmap>(i, seed, cnf, mdb, appmd)
-                    }));
-                }
-                handles
+        let (config, appmd, mdb) = (config.clone(), appmd.clone(), mdb.clone());
+        let handles = match *bitmap {
+            "nobitmap" => {
+                spawn_threads(seed, NoBitmap, mdb, config, appmd, seqno, n_threads)
             }
-            ("nodiff", "xor") => {
-                let mdb =
-                    util::load_index(seed, n_sets + n_inserts, 0, n_dels + n_rems, 0);
-
-                let appmd = "test_robt_read-metadata".as_bytes().to_vec();
-                let mut build = Builder::initial(config.clone(), appmd.clone()).unwrap();
-                let seqno = Some(mdb.to_seqno());
-                build
-                    .build_index(mdb.iter().unwrap(), Xor8::new(), seqno)
-                    .unwrap();
-
-                let mut handles = vec![];
-                for i in 0..n_threads {
-                    let (cnf, mdb, appmd) = (config.clone(), mdb.clone(), appmd.clone());
-                    handles.push(thread::spawn(move || {
-                        run_test_robt::<Xor8>(i, seed, cnf, mdb, appmd)
-                    }));
-                }
-                handles
+            "xor" => {
+                spawn_threads(seed, Xor8::new(), mdb, config, appmd, seqno, n_threads)
             }
-            ("diff", "nobitmap") => {
-                let mdb = util::load_index(seed, n_sets, n_inserts, n_dels, n_rems);
-
-                let appmd = "test_robt_read-metadata".as_bytes().to_vec();
-                let mut build = Builder::initial(config.clone(), appmd.clone()).unwrap();
-                let seqno = Some(mdb.to_seqno());
-                build
-                    .build_index(mdb.iter().unwrap(), NoBitmap, seqno)
-                    .unwrap();
-
-                let mut handles = vec![];
-                for i in 0..n_threads {
-                    let (cnf, mdb, appmd) = (config.clone(), mdb.clone(), appmd.clone());
-                    handles.push(thread::spawn(move || {
-                        run_test_robt::<NoBitmap>(i, seed, cnf, mdb, appmd)
-                    }));
-                }
-                handles
-            }
-            ("diff", "xor") => {
-                let mdb = util::load_index(seed, n_sets, n_inserts, n_dels, n_rems);
-
-                let appmd = "test_robt_read-metadata".as_bytes().to_vec();
-                let mut build = Builder::initial(config.clone(), appmd.clone()).unwrap();
-                let seqno = Some(mdb.to_seqno());
-                build
-                    .build_index(mdb.iter().unwrap(), Xor8::new(), seqno)
-                    .unwrap();
-
-                let mut handles = vec![];
-                for i in 0..n_threads {
-                    let (cnf, mdb, appmd) = (config.clone(), mdb.clone(), appmd.clone());
-                    handles.push(thread::spawn(move || {
-                        run_test_robt::<Xor8>(i, seed, cnf, mdb, appmd)
-                    }));
-                }
-                handles
-            }
-            (_, _) => unreachable!(),
+            _ => unreachable!(),
         };
 
         for handle in handles.into_iter() {
             handle.join().unwrap();
         }
     }
+}
+
+fn spawn_threads<B>(
+    seed: u128,
+    bitmap: B,
+    mdb: Mdb<u16, u64, u64>,
+    config: Config,
+    appmd: Vec<u8>,
+    seqno: Option<u64>,
+    n_threads: usize,
+) -> Vec<thread::JoinHandle<()>>
+where
+    B: Bloom,
+{
+    let mut build = Builder::initial(config.clone(), appmd.clone()).unwrap();
+    build
+        .build_index(mdb.iter().unwrap(), bitmap, seqno)
+        .unwrap();
+
+    let mut handles = vec![];
+    for i in 0..n_threads {
+        let (cnf, mdb, appmd) = (config.clone(), mdb.clone(), appmd.clone());
+        let seed = seed + ((i as u128) * 10);
+        handles.push(thread::spawn(move || {
+            run_test_robt::<B>(i, seed, cnf, mdb, appmd)
+        }));
+    }
+
+    handles
 }
 
 fn run_test_robt<B>(
@@ -199,22 +172,13 @@ fn run_test_robt<B>(
                     (Err(err), Ok(e)) => panic!("{} != {:?}", err, e),
                 }
             }
-            Op::GetVersions(key) if config.delta_ok == false => {
-                counts[1] += 1;
-                match (index.get(&key), mdb.get(&key)) {
-                    (Ok(e1), Ok(mut e2)) => {
-                        e2.deltas = vec![];
-                        assert_eq!(e1, e2);
-                    }
-                    (Err(KeyNotFound(_, _)), Err(ppom::Error::KeyNotFound(_, _))) => (),
-                    (Err(err1), Err(err2)) => panic!("{} != {}", err1, err2),
-                    (Ok(e), Err(err)) => panic!("{:?} != {}", e, err),
-                    (Err(err), Ok(e)) => panic!("{} != {:?}", err, e),
-                }
-            }
             Op::GetVersions(key) => {
                 counts[2] += 1;
                 match (index.get_versions(&key), mdb.get(&key)) {
+                    (Ok(e1), Ok(mut e2)) if !config.delta_ok => {
+                        e2.deltas = vec![];
+                        assert_eq!(e1, e2);
+                    }
                     (Ok(e1), Ok(e2)) => assert_eq!(e1, e2),
                     (Err(KeyNotFound(_, _)), Err(ppom::Error::KeyNotFound(_, _))) => (),
                     (Err(err1), Err(err2)) => panic!("{} != {}", err1, err2),
@@ -255,7 +219,10 @@ fn run_test_robt<B>(
                         let r = (Bound::from(l), Bound::from(h));
                         let mut iter1 = mdb.range(r.clone()).unwrap();
                         let mut iter2 = index.iter_versions(r).unwrap();
-                        while let Some(e1) = iter1.next() {
+                        while let Some(mut e1) = iter1.next() {
+                            if !config.delta_ok {
+                                e1.deltas = vec![];
+                            }
                             assert_eq!(e1, iter2.next().unwrap().unwrap())
                         }
                         assert!(iter1.next().is_none());
@@ -266,7 +233,10 @@ fn run_test_robt<B>(
                         let r = (Bound::from(l), Bound::from(h));
                         let mut iter1 = mdb.reverse(r.clone()).unwrap();
                         let mut iter2 = index.reverse_versions(r).unwrap();
-                        while let Some(e1) = iter1.next() {
+                        while let Some(mut e1) = iter1.next() {
+                            if !config.delta_ok {
+                                e1.deltas = vec![];
+                            }
                             assert_eq!(e1, iter2.next().unwrap().unwrap())
                         }
                         assert!(iter1.next().is_none());
