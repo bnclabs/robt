@@ -95,16 +95,22 @@ impl<K, V, D> Builder<K, V, D> {
     /// and deltas within a value-log file. Instead of creating a fresh
     /// value-log file, incremental build will serialize values and deltas
     /// into supplied `vlog` file in append only fashion.
-    pub fn incremental(c: Config, vlog: ffi::OsString, meta: Vec<u8>) -> Result<Self> {
+    pub fn incremental(
+        c: Config,
+        vlog: Option<ffi::OsString>,
+        meta: Vec<u8>,
+    ) -> Result<Self> {
         let queue_size = c.flush_queue_size;
         let iflush = {
             let file_path = to_index_file(&c.dir, &c.name);
             Rc::new(RefCell::new(Flusher::new(&file_path, true, queue_size)?))
         };
-        let vflush = if c.value_in_vlog || c.delta_ok {
-            Rc::new(RefCell::new(Flusher::new(&vlog, true, queue_size)?))
-        } else {
-            Rc::new(RefCell::new(Flusher::empty()))
+        let vflush = match vlog {
+            Some(vlog) if c.value_in_vlog || c.delta_ok => {
+                Rc::new(RefCell::new(Flusher::new(&vlog, true, queue_size)?))
+            }
+            Some(_) => err_at!(Invalid, msg: "vlog not required")?,
+            None => Rc::new(RefCell::new(Flusher::empty())),
         };
 
         let val = Builder {

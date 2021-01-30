@@ -100,7 +100,7 @@ where
                     let entry = match &mut self.vlog {
                         Some(fd) => entry.into_native(fd, versions)?,
                         None => {
-                            // entry.drain_deltas();
+                            entry.drain_deltas();
                             entry
                         }
                     };
@@ -359,11 +359,11 @@ impl<'a, K, V, D> Iter<'a, K, V, D> {
         match &mut self.reader.vlog {
             Some(fd) if self.versions => entry.into_native(fd, self.versions),
             Some(fd) => {
-                // entry.drain_deltas();
+                entry.drain_deltas();
                 entry.into_native(fd, self.versions)
             }
             None => {
-                // entry.drain_deltas();
+                entry.drain_deltas();
                 Ok(entry)
             }
         }

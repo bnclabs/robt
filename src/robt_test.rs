@@ -10,10 +10,12 @@ use super::*;
 
 #[test]
 fn test_robt_read() {
-    let seed: u128 =
-        [random(), 315408295460649044406651951935429140111][random::<usize>() % 2];
+    let seed: u128 = [
+        random(),
+        315408295460649044406651951935429140111,
+        315408295460649044406651951935429140111,
+    ][random::<usize>() % 2];
     // let seed: u128 = 310536732434209035545903276086275722861;
-    let seed: u128 = 315408295460649044406651951935429140111;
     println!("test_robt_read {}", seed);
     let mut rng = SmallRng::from_seed(seed.to_le_bytes());
 
@@ -51,7 +53,9 @@ fn test_robt_read() {
 
     let appmd = "test_robt_read-metadata".as_bytes().to_vec();
 
-    for (diff, bitmap) in testcases.iter() {
+    for (i, (diff, bitmap)) in testcases.iter().enumerate() {
+        let seed = seed + (i as u128) * 100;
+
         println!("test_robt_read {} {}", diff, bitmap);
         let mut config = config.clone();
         config.value_in_vlog = rng.gen();
@@ -63,46 +67,100 @@ fn test_robt_read() {
             "diff" => (n_sets, n_inserts, n_rems, n_dels),
             _ => unreachable!(),
         };
-        let mdb = util::load_index(seed, s, i, r, d);
+        let mdb = util::load_index(seed, s, i, r, d, None);
         let seqno = Some(mdb.to_seqno());
 
-        let (config, appmd, mdb) = (config.clone(), appmd.clone(), mdb.clone());
         let handles = match *bitmap {
             "nobitmap" => {
-                spawn_threads(seed, NoBitmap, mdb, config, appmd, seqno, n_threads)
+                do_initial(seed, NoBitmap, &mdb, &config, &appmd, seqno, n_threads)
             }
             "xor" => {
-                spawn_threads(seed, Xor8::new(), mdb, config, appmd, seqno, n_threads)
+                do_initial(seed, Xor8::new(), &mdb, &config, &appmd, seqno, n_threads)
             }
             _ => unreachable!(),
         };
-
         for handle in handles.into_iter() {
             handle.join().unwrap();
         }
+
+        //let snap = util::load_index(seed, s, i, r, d, Some(mdb.to_seqno()));
+        //let seqno = Some(snap.to_seqno());
+
+        //let appmd = "test_robt_read-metadata-snap".as_bytes().to_vec();
+        //let handles = match *bitmap {
+        //    "nobitmap" => do_incremental(
+        //        seed, NoBitmap, &snap, &mdb, &config, &appmd, seqno, n_threads,
+        //    ),
+        //    "xor" => {
+        //        let bt = Xor8::new();
+        //        do_incremental(seed, bt, &snap, &mdb, &config, &appmd, seqno, n_threads)
+        //    }
+        //    _ => unreachable!(),
+        //};
+        //for handle in handles.into_iter() {
+        //    handle.join().unwrap();
+        //}
     }
 }
 
-fn spawn_threads<B>(
+fn do_initial<B>(
     seed: u128,
     bitmap: B,
-    mdb: Mdb<u16, u64, u64>,
-    config: Config,
-    appmd: Vec<u8>,
+    mdb: &Mdb<u16, u64, u64>,
+    config: &Config,
+    appmd: &[u8],
     seqno: Option<u64>,
     n_threads: usize,
 ) -> Vec<thread::JoinHandle<()>>
 where
     B: Bloom,
 {
-    let mut build = Builder::initial(config.clone(), appmd.clone()).unwrap();
+    let mut build = Builder::initial(config.clone(), appmd.to_vec()).unwrap();
     build
         .build_index(mdb.iter().unwrap(), bitmap, seqno)
         .unwrap();
 
     let mut handles = vec![];
     for i in 0..n_threads {
-        let (cnf, mdb, appmd) = (config.clone(), mdb.clone(), appmd.clone());
+        let (cnf, mdb, appmd) = (config.clone(), mdb.clone(), appmd.to_vec());
+        let seed = seed + ((i as u128) * 10);
+        handles.push(thread::spawn(move || {
+            run_test_robt::<B>(i, seed, cnf, mdb, appmd)
+        }));
+    }
+
+    handles
+}
+
+fn do_incremental<B>(
+    seed: u128,
+    bitmap: B,
+    snap: &Mdb<u16, u64, u64>,
+    mdb: &Mdb<u16, u64, u64>,
+    config: &Config,
+    appmd: &[u8],
+    seqno: Option<u64>,
+    n_threads: usize,
+) -> Vec<thread::JoinHandle<()>>
+where
+    B: Bloom,
+{
+    let vlog = {
+        let dir = config.dir.as_os_str();
+        let file = config.to_index_file_location();
+        let index = open_index::<B>(dir, &config.name, &file, seed);
+        index.to_vlog_file_location()
+    };
+    let mut build = Builder::incremental(config.clone(), vlog, appmd.to_vec()).unwrap();
+    build
+        .build_index(snap.iter().unwrap(), bitmap, seqno)
+        .unwrap();
+
+    mdb.commit(snap.iter().unwrap()).unwrap();
+
+    let mut handles = vec![];
+    for i in 0..n_threads {
+        let (cnf, mdb, appmd) = (config.clone(), mdb.clone(), appmd.to_vec());
         let seed = seed + ((i as u128) * 10);
         handles.push(thread::spawn(move || {
             run_test_robt::<B>(i, seed, cnf, mdb, appmd)

@@ -33,11 +33,13 @@ pub fn load_index(
     inserts: u64,
     rems: u64,
     dels: u64,
+    seqno: Option<u64>,
 ) -> Mdb<u16, u64, u64> {
     use rand::{rngs::SmallRng, Rng, SeedableRng};
 
     let mut rng = SmallRng::from_seed(seed.to_le_bytes());
     let index = Mdb::new("testing");
+    seqno.map(|seqno| index.set_seqno(seqno));
 
     let (mut s, mut i, mut d, mut r) = (sets, inserts, dels, rems);
     while (s + i + d + r) > 0 {
