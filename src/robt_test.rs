@@ -14,8 +14,9 @@ fn test_robt_read() {
         random(),
         315408295460649044406651951935429140111,
         315408295460649044406651951935429140111,
+        254380117901283245685140957742548176144,
     ][random::<usize>() % 2];
-    // let seed: u128 = 310536732434209035545903276086275722861;
+    let seed: u128 = 254380117901283245685140957742548176144;
     println!("test_robt_read {}", seed);
     let mut rng = SmallRng::from_seed(seed.to_le_bytes());
 
@@ -83,23 +84,23 @@ fn test_robt_read() {
             handle.join().unwrap();
         }
 
-        //let snap = util::load_index(seed, s, i, r, d, Some(mdb.to_seqno()));
-        //let seqno = Some(snap.to_seqno());
+        let snap = util::load_index(seed, s, i, r, d, Some(mdb.to_seqno()));
+        let seqno = Some(snap.to_seqno());
 
-        //let appmd = "test_robt_read-metadata-snap".as_bytes().to_vec();
-        //let handles = match *bitmap {
-        //    "nobitmap" => do_incremental(
-        //        seed, NoBitmap, &snap, &mdb, &config, &appmd, seqno, n_threads,
-        //    ),
-        //    "xor" => {
-        //        let bt = Xor8::new();
-        //        do_incremental(seed, bt, &snap, &mdb, &config, &appmd, seqno, n_threads)
-        //    }
-        //    _ => unreachable!(),
-        //};
-        //for handle in handles.into_iter() {
-        //    handle.join().unwrap();
-        //}
+        let appmd = "test_robt_read-metadata-snap".as_bytes().to_vec();
+        let handles = match *bitmap {
+            "nobitmap" => do_incremental(
+                seed, NoBitmap, &snap, &mdb, &config, &appmd, seqno, n_threads,
+            ),
+            "xor" => {
+                let bt = Xor8::new();
+                do_incremental(seed, bt, &snap, &mdb, &config, &appmd, seqno, n_threads)
+            }
+            _ => unreachable!(),
+        };
+        for handle in handles.into_iter() {
+            handle.join().unwrap();
+        }
     }
 }
 
@@ -151,12 +152,14 @@ where
         let index = open_index::<B>(dir, &config.name, &file, seed);
         index.to_vlog_file_location()
     };
-    let mut build = Builder::incremental(config.clone(), vlog, appmd.to_vec()).unwrap();
-    build
-        .build_index(snap.iter().unwrap(), bitmap, seqno)
-        .unwrap();
 
     mdb.commit(snap.iter().unwrap()).unwrap();
+    mdb.set_seqno(snap.to_seqno());
+
+    let mut build = Builder::incremental(config.clone(), vlog, appmd.to_vec()).unwrap();
+    build
+        .build_index(mdb.iter().unwrap(), bitmap, seqno)
+        .unwrap();
 
     let mut handles = vec![];
     for i in 0..n_threads {
@@ -207,7 +210,7 @@ fn run_test_robt<B>(
                     Name => assert_eq!(index.to_name(), config.name.clone()),
                     Stats => {
                         let stats = index.to_stats();
-                        validate_stats(&stats, &config, None, &mdb, 0);
+                        validate_stats(&stats, &config, &mdb, 0);
                     }
                     AppMetadata => assert_eq!(index.to_app_metadata(), app_meta_data),
                     Seqno => assert_eq!(index.to_seqno(), mdb.to_seqno()),
@@ -332,7 +335,6 @@ fn test_compact_tombstone() {
 fn validate_stats(
     stats: &Stats,
     config: &Config,
-    vlog_file: Option<ffi::OsString>,
     mdb: &Mdb<u16, u64, u64>,
     n_abytes: u64,
 ) {
@@ -341,8 +343,14 @@ fn validate_stats(
     assert_eq!(stats.m_blocksize, config.m_blocksize);
     assert_eq!(stats.v_blocksize, config.v_blocksize);
     assert_eq!(stats.delta_ok, config.delta_ok);
-    assert_eq!(stats.vlog_file, vlog_file);
     assert_eq!(stats.value_in_vlog, config.value_in_vlog);
+
+    if config.value_in_vlog || config.delta_ok {
+        assert_eq!(
+            config.to_vlog_file_location(),
+            stats.vlog_file.clone().unwrap()
+        );
+    }
 
     assert_eq!(stats.n_count, mdb.len() as u64);
     assert_eq!(stats.n_deleted, mdb.deleted_count());

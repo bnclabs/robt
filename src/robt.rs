@@ -64,20 +64,26 @@ impl<K, V, D> Builder<K, V, D> {
             let file_path = to_index_file(&config.dir, &config.name);
             Rc::new(RefCell::new(Flusher::new(&file_path, true, queue_size)?))
         };
-        let vflush = if config.value_in_vlog || config.delta_ok {
+        let (vflush, vlog_file) = if config.value_in_vlog || config.delta_ok {
             let file_path = to_vlog_file(&config.dir, &config.name);
-            Rc::new(RefCell::new(Flusher::new(&file_path, true, queue_size)?))
+            (
+                Rc::new(RefCell::new(Flusher::new(&file_path, true, queue_size)?)),
+                Some(file_path),
+            )
         } else {
-            Rc::new(RefCell::new(Flusher::empty()))
+            (Rc::new(RefCell::new(Flusher::empty())), None)
         };
 
+        let mut stats: Stats = config.clone().into();
+        stats.vlog_file = vlog_file;
+
         let val = Builder {
-            config: config.clone(),
+            config,
             iflush,
             vflush,
 
             app_meta: meta,
-            stats: config.into(),
+            stats,
             root: u64::default(),
 
             _key: marker::PhantomData,
@@ -96,30 +102,34 @@ impl<K, V, D> Builder<K, V, D> {
     /// value-log file, incremental build will serialize values and deltas
     /// into supplied `vlog` file in append only fashion.
     pub fn incremental(
-        c: Config,
+        config: Config,
         vlog: Option<ffi::OsString>,
         meta: Vec<u8>,
     ) -> Result<Self> {
-        let queue_size = c.flush_queue_size;
+        let queue_size = config.flush_queue_size;
         let iflush = {
-            let file_path = to_index_file(&c.dir, &c.name);
+            let file_path = to_index_file(&config.dir, &config.name);
             Rc::new(RefCell::new(Flusher::new(&file_path, true, queue_size)?))
         };
-        let vflush = match vlog {
-            Some(vlog) if c.value_in_vlog || c.delta_ok => {
-                Rc::new(RefCell::new(Flusher::new(&vlog, true, queue_size)?))
-            }
+        let (vflush, vlog_file) = match vlog {
+            Some(vlog) if config.value_in_vlog || config.delta_ok => (
+                Rc::new(RefCell::new(Flusher::new(&vlog, true, queue_size)?)),
+                Some(vlog),
+            ),
             Some(_) => err_at!(Invalid, msg: "vlog not required")?,
-            None => Rc::new(RefCell::new(Flusher::empty())),
+            None => (Rc::new(RefCell::new(Flusher::empty())), None),
         };
 
+        let mut stats: Stats = config.clone().into();
+        stats.vlog_file = vlog_file;
+
         let val = Builder {
-            config: c.clone(),
+            config,
             iflush,
             vflush,
 
             app_meta: meta,
-            stats: c.into(),
+            stats,
             root: u64::default(),
 
             _key: marker::PhantomData,

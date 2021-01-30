@@ -45,7 +45,7 @@ pub fn load_index(
     while (s + i + d + r) > 0 {
         let key: u16 = rng.gen();
         let value: u64 = rng.gen();
-        // println!("{} {}", (s + i + d + r), key);
+        // println!("{} seqno:{} {}", (s + i + d + r), key, index.to_seqno() + 1,);
         match rng.gen::<u64>() % (s + i + d + r) {
             k if k < s => {
                 index.set(key, value).ok();

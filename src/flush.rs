@@ -30,7 +30,9 @@ impl Flusher {
         let (fd, fpos) = if create {
             (create_file_a(file)?, 0)
         } else {
-            let fpos = err_at!(IOError, fs::metadata(file))?.len();
+            let fpos = err_at!(IOError, fs::metadata(file))?
+                .len()
+                .saturating_sub(1);
             (open_file_a(file)?, fpos)
         };
 
