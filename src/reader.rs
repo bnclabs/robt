@@ -115,7 +115,7 @@ where
         versions: bool,
     ) -> Result<Iter<K, V, D>>
     where
-        K: Clone + Ord + Borrow<Q> + fmt::Debug,
+        K: Clone + Ord + Borrow<Q>,
         V: Clone,
         D: Clone,
         Q: Ord + ToOwned<Owned = K>,
@@ -177,7 +177,7 @@ where
         block: Vec<Entry<K, V, D>>,
     ) -> Result<Vec<Vec<Entry<K, V, D>>>>
     where
-        K: Clone + Borrow<Q> + fmt::Debug,
+        K: Clone + Borrow<Q>,
         V: Clone,
         D: Clone,
         Q: Ord,
@@ -224,7 +224,7 @@ where
         block: Vec<Entry<K, V, D>>,
     ) -> Result<Vec<Vec<Entry<K, V, D>>>>
     where
-        K: Clone + Borrow<Q> + fmt::Debug,
+        K: Clone + Borrow<Q>,
         V: Clone,
         D: Clone,
         Q: Ord,

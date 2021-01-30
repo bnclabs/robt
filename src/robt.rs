@@ -450,7 +450,7 @@ impl<K, V, D, B> Index<K, V, D, B> {
         cutoff: db::Cutoff,
     ) -> Result<Self>
     where
-        K: Clone + Ord + Hash + FromCbor + IntoCbor + fmt::Debug,
+        K: Clone + Ord + Hash + FromCbor + IntoCbor,
         V: Clone + FromCbor + IntoCbor,
         D: Clone + FromCbor + IntoCbor,
         B: Bloom,
@@ -579,7 +579,7 @@ impl<K, V, D, B> Index<K, V, D, B> {
 
     pub fn iter<Q, R>(&mut self, range: R) -> Result<Iter<K, V, D>>
     where
-        K: Clone + Ord + Borrow<Q> + FromCbor + fmt::Debug,
+        K: Clone + Ord + Borrow<Q> + FromCbor,
         V: Clone + FromCbor,
         D: Clone + FromCbor,
         Q: Ord + ToOwned<Owned = K>,
@@ -591,7 +591,7 @@ impl<K, V, D, B> Index<K, V, D, B> {
 
     pub fn reverse<Q, R>(&mut self, range: R) -> Result<Iter<K, V, D>>
     where
-        K: Clone + Ord + Borrow<Q> + FromCbor + fmt::Debug,
+        K: Clone + Ord + Borrow<Q> + FromCbor,
         V: Clone + FromCbor,
         D: Clone + FromCbor,
         Q: Ord + ToOwned<Owned = K>,
@@ -603,7 +603,7 @@ impl<K, V, D, B> Index<K, V, D, B> {
 
     pub fn iter_versions<Q, R>(&mut self, range: R) -> Result<Iter<K, V, D>>
     where
-        K: Clone + Ord + Borrow<Q> + FromCbor + fmt::Debug,
+        K: Clone + Ord + Borrow<Q> + FromCbor,
         V: Clone + FromCbor,
         D: Clone + FromCbor,
         Q: Ord + ToOwned<Owned = K>,
@@ -615,7 +615,7 @@ impl<K, V, D, B> Index<K, V, D, B> {
 
     pub fn reverse_versions<Q, R>(&mut self, range: R) -> Result<Iter<K, V, D>>
     where
-        K: Clone + Ord + Borrow<Q> + FromCbor + fmt::Debug,
+        K: Clone + Ord + Borrow<Q> + FromCbor,
         V: Clone + FromCbor,
         D: Clone + FromCbor,
         Q: Ord + ToOwned<Owned = K>,
