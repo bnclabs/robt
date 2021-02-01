@@ -41,28 +41,28 @@ pub fn load_index(
     let index = Mdb::new("testing");
     seqno.map(|seqno| index.set_seqno(seqno));
 
-    let (mut s, mut i, mut d, mut r) = (sets, inserts, dels, rems);
-    while (s + i + d + r) > 0 {
+    let (mut se, mut it, mut ds, mut rs) = (sets, inserts, dels, rems);
+    while (se + it + ds + rs) > 0 {
         let key: u16 = rng.gen();
         let value: u64 = rng.gen();
-        // println!("{} seqno:{} {}", (s + i + d + r), key, index.to_seqno() + 1,);
-        match rng.gen::<u64>() % (s + i + d + r) {
-            k if k < s => {
+        // println!("{} seqno:{} {}", (se + it + ds + rs), key, index.to_seqno() + 1,);
+        match rng.gen::<u64>() % (se + it + ds + rs) {
+            k if k < se => {
                 index.set(key, value).ok();
-                s -= 1;
+                se -= 1;
             }
-            k if k < (s + i) => {
+            k if k < (se + it) => {
                 index.insert(key, value).ok();
-                i -= 1;
+                it -= 1;
             }
             k => match index.get(&key) {
-                Ok(entry) if !entry.is_deleted() && (k < (s + i + d)) => {
+                Ok(entry) if !entry.is_deleted() && (k < (se + it + ds)) => {
                     index.delete(&key).unwrap();
-                    d -= 1;
+                    ds -= 1;
                 }
                 Ok(entry) if !entry.is_deleted() => {
                     index.remove(&key).unwrap();
-                    r -= 1;
+                    rs -= 1;
                 }
                 _ => (),
             },

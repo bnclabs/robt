@@ -379,16 +379,15 @@ where
     type Item = Result<db::Entry<K, V, D>>;
 
     fn next(&mut self) -> Option<Self::Item> {
-        match self.entry.take() {
-            Some(entry) => return Some(Ok(entry)),
-            None => (),
+        if let Some(entry) = self.entry.take() {
+            return Some(Ok(entry));
         }
 
         let fd = &mut self.reader.index;
         let m_blocksize = self.reader.m_blocksize;
 
         match self.stack.pop() {
-            Some(block) if block.len() == 0 => self.next(),
+            Some(block) if block.is_empty() => self.next(),
             Some(mut block) => match block.remove(0) {
                 entry @ Entry::ZZ { .. } => {
                     self.stack.push(block);

@@ -16,7 +16,7 @@ fn test_robt_read() {
         315408295460649044406651951935429140111,
         254380117901283245685140957742548176144,
     ][random::<usize>() % 2];
-    let seed: u128 = 254380117901283245685140957742548176144;
+    // let seed: u128 = 254380117901283245685140957742548176144;
     println!("test_robt_read {}", seed);
     let mut rng = SmallRng::from_seed(seed.to_le_bytes());
 
@@ -89,12 +89,16 @@ fn test_robt_read() {
 
         let appmd = "test_robt_read-metadata-snap".as_bytes().to_vec();
         let handles = match *bitmap {
-            "nobitmap" => do_incremental(
-                seed, NoBitmap, &snap, &mdb, &config, &appmd, seqno, n_threads,
-            ),
+            "nobitmap" => {
+                mdb.commit(snap.iter().unwrap()).unwrap();
+                mdb.set_seqno(snap.to_seqno());
+                do_incremental(seed, NoBitmap, &mdb, &config, &appmd, seqno, n_threads)
+            }
             "xor" => {
+                mdb.commit(snap.iter().unwrap()).unwrap();
+                mdb.set_seqno(snap.to_seqno());
                 let bt = Xor8::new();
-                do_incremental(seed, bt, &snap, &mdb, &config, &appmd, seqno, n_threads)
+                do_incremental(seed, bt, &mdb, &config, &appmd, seqno, n_threads)
             }
             _ => unreachable!(),
         };
@@ -136,7 +140,6 @@ where
 fn do_incremental<B>(
     seed: u128,
     bitmap: B,
-    snap: &Mdb<u16, u64, u64>,
     mdb: &Mdb<u16, u64, u64>,
     config: &Config,
     appmd: &[u8],
@@ -152,9 +155,6 @@ where
         let index = open_index::<B>(dir, &config.name, &file, seed);
         index.to_vlog_file_location()
     };
-
-    mdb.commit(snap.iter().unwrap()).unwrap();
-    mdb.set_seqno(snap.to_seqno());
 
     let mut build = Builder::incremental(config.clone(), vlog, appmd.to_vec()).unwrap();
     build
@@ -247,14 +247,14 @@ fn run_test_robt<B>(
                     (Err(err), Ok(e)) => panic!("{} != {:?}", err, e),
                 }
             }
-            Op::IterOp(iter_op) => {
+            Op::Iter(iter_op) => {
                 use IterOp::*;
 
                 match iter_op {
                     Iter((l, h)) => {
                         counts[3] += 1;
                         let r = (Bound::from(l), Bound::from(h));
-                        let mut iter1 = mdb.range(r.clone()).unwrap();
+                        let mut iter1 = mdb.range(r).unwrap();
                         let mut iter2 = index.iter(r).unwrap();
                         while let Some(mut e1) = iter1.next() {
                             e1.deltas = vec![];
@@ -266,7 +266,7 @@ fn run_test_robt<B>(
                     Reverse((l, h)) => {
                         counts[4] += 1;
                         let r = (Bound::from(l), Bound::from(h));
-                        let mut iter1 = mdb.reverse(r.clone()).unwrap();
+                        let mut iter1 = mdb.reverse(r).unwrap();
                         let mut iter2 = index.reverse(r).unwrap();
                         while let Some(mut e1) = iter1.next() {
                             e1.deltas = vec![];
@@ -278,7 +278,7 @@ fn run_test_robt<B>(
                     IterVersions((l, h)) => {
                         counts[5] += 1;
                         let r = (Bound::from(l), Bound::from(h));
-                        let mut iter1 = mdb.range(r.clone()).unwrap();
+                        let mut iter1 = mdb.range(r).unwrap();
                         let mut iter2 = index.iter_versions(r).unwrap();
                         while let Some(mut e1) = iter1.next() {
                             if !config.delta_ok {
@@ -292,7 +292,7 @@ fn run_test_robt<B>(
                     ReverseVersions((l, h)) => {
                         counts[6] += 1;
                         let r = (Bound::from(l), Bound::from(h));
-                        let mut iter1 = mdb.reverse(r.clone()).unwrap();
+                        let mut iter1 = mdb.reverse(r).unwrap();
                         let mut iter2 = index.reverse_versions(r).unwrap();
                         while let Some(mut e1) = iter1.next() {
                             if !config.delta_ok {
@@ -407,7 +407,7 @@ enum Op<K> {
     Mo(MetaOp),
     Get(K),
     GetVersions(K),
-    IterOp(IterOp<K>),
+    Iter(IterOp<K>),
     Validate,
 }
 

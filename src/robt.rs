@@ -225,7 +225,7 @@ where
     }
 
     fn build_flush(&mut self, bitmap: Vec<u8>, seqno: Option<u64>) -> Result<(u64, u64)> {
-        let block = self.to_meta_blocks(bitmap, seqno)?;
+        let block = self.meta_blocks(bitmap, seqno)?;
 
         self.iflush.borrow_mut().flush(block)?;
 
@@ -235,7 +235,7 @@ where
         Ok((len1, len2))
     }
 
-    fn to_meta_blocks(&mut self, bitmap: Vec<u8>, seqno: Option<u64>) -> Result<Vec<u8>> {
+    fn meta_blocks(&mut self, bitmap: Vec<u8>, seqno: Option<u64>) -> Result<Vec<u8>> {
         self.stats.seqno = seqno.unwrap_or(self.stats.seqno);
         let stats = util::into_cbor_bytes(self.stats.clone())?;
 
