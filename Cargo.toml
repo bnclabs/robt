@@ -1,11 +1,11 @@
 [package]
 name = "robt"
-version = "0.1.0"
+version = "0.2.0"
 description = "Read only, immutable Btree for indexing key,value"
 repository = "https://github.com/bnclabs/robt"
 documentation = "https://docs.rs/robt/"
-keywords = ["btree", "data-structure", "storage", "index"]
-categories = ["database", "datastructure", "concurrency"]
+keywords = ["btree", "data-structures", "storage", "index"]
+categories = ["database", "data-structures", "concurrency"]
 authors = ["prataprc <prataprc@gmail.com>"]
 license = "MIT"
 edition = "2018"
