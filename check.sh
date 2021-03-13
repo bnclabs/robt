@@ -1,16 +1,19 @@
 #! /usr/bin/env bash
 
-cargo +nightly build
-# cargo +stable build // we are still using unstable features
+export RUST_BACKTRACE=full
+export RUSTFLAGS=-g
+exec > check.out
+exec 2>&1
 
-cargo +nightly doc
-# cargo +stable doc // we are still using unstable features.
+set -o xtrace
 
-cargo +nightly test
-# cargo +stable test // we are still using unstable features.
+exec_prg() {
+    for i in {0..5};
+    do
+        date; time cargo +nightly test --release -- --nocapture || exit $?
+        date; time cargo +nightly test -- --nocapture || exit $?
+        # repeat this for stable, once package is ready for stable.
+    done
+}
 
-cargo +nightly bench
-# cargo +stable bench // we are still using unstable features.
-
-cargo +nightly clippy --all-targets --all-features
-
+exec_prg

@@ -2,7 +2,7 @@ use arbitrary::{self, unstructured::Unstructured, Arbitrary};
 use mkit::nobitmap::NoBitmap;
 use ppom::Mdb;
 use rand::{prelude::random, rngs::SmallRng, Rng, SeedableRng};
-use xorfilter::Xor8;
+use xorfilter::{BuildHasherDefault, Xor8};
 
 use std::thread;
 
@@ -75,9 +75,15 @@ fn test_robt_read() {
             "nobitmap" => {
                 do_initial(seed, NoBitmap, &mdb, &config, &appmd, seqno, n_threads)
             }
-            "xor" => {
-                do_initial(seed, Xor8::new(), &mdb, &config, &appmd, seqno, n_threads)
-            }
+            "xor" => do_initial(
+                seed,
+                Xor8::<BuildHasherDefault>::new(),
+                &mdb,
+                &config,
+                &appmd,
+                seqno,
+                n_threads,
+            ),
             _ => unreachable!(),
         };
         for handle in handles.into_iter() {
@@ -97,7 +103,7 @@ fn test_robt_read() {
             "xor" => {
                 mdb.commit(snap.iter().unwrap()).unwrap();
                 mdb.set_seqno(snap.to_seqno());
-                let bt = Xor8::new();
+                let bt = Xor8::<BuildHasherDefault>::new();
                 do_incremental(seed, bt, &mdb, &config, &appmd, seqno, n_threads)
             }
             _ => unreachable!(),
