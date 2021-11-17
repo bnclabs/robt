@@ -24,7 +24,7 @@ where
 }
 
 #[cfg(test)]
-use ppom::Mdb;
+use ppom::mdb::OMap;
 
 #[cfg(test)]
 pub fn load_index(
@@ -34,11 +34,11 @@ pub fn load_index(
     rems: u64,
     dels: u64,
     seqno: Option<u64>,
-) -> Mdb<u16, u64, u64> {
+) -> OMap<u16, u64> {
     use rand::{rngs::SmallRng, Rng, SeedableRng};
 
     let mut rng = SmallRng::from_seed(seed.to_le_bytes());
-    let index = Mdb::new("testing");
+    let index = OMap::new("testing");
     seqno.map(|seqno| index.set_seqno(seqno));
 
     let (mut se, mut it, mut ds, mut rs) = (sets, inserts, dels, rems);

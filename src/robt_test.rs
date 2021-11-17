@@ -1,6 +1,6 @@
 use arbitrary::{self, unstructured::Unstructured, Arbitrary};
 use mkit::nobitmap::NoBitmap;
-use ppom::Mdb;
+use ppom::mdb::OMap;
 use rand::{prelude::random, rngs::SmallRng, Rng, SeedableRng};
 use xorfilter::{BuildHasherDefault, Xor8};
 
@@ -117,7 +117,7 @@ fn test_robt_read() {
 fn do_initial<B>(
     seed: u128,
     bitmap: B,
-    mdb: &Mdb<u16, u64, u64>,
+    mdb: &OMap<u16, u64>,
     config: &Config,
     appmd: &[u8],
     seqno: Option<u64>,
@@ -146,7 +146,7 @@ where
 fn do_incremental<B>(
     seed: u128,
     bitmap: B,
-    mdb: &Mdb<u16, u64, u64>,
+    mdb: &OMap<u16, u64>,
     config: &Config,
     appmd: &[u8],
     seqno: Option<u64>,
@@ -183,7 +183,7 @@ fn run_test_robt<B>(
     id: usize,
     seed: u128,
     config: Config,
-    mdb: Mdb<u16, u64, u64>,
+    mdb: OMap<u16, u64>,
     app_meta_data: Vec<u8>,
 ) where
     B: Bloom,
@@ -338,12 +338,7 @@ fn test_compact_tombstone() {
     println!("test_compact {}", seed);
 }
 
-fn validate_stats(
-    stats: &Stats,
-    config: &Config,
-    mdb: &Mdb<u16, u64, u64>,
-    n_abytes: u64,
-) {
+fn validate_stats(stats: &Stats, config: &Config, mdb: &OMap<u16, u64>, n_abytes: u64) {
     assert_eq!(stats.name, config.name);
     assert_eq!(stats.z_blocksize, config.z_blocksize);
     assert_eq!(stats.m_blocksize, config.m_blocksize);

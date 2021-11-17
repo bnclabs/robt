@@ -24,7 +24,7 @@ required-features = ["robt"]
 [dependencies]
 log = "0.4.11"
 lazy_static = "1.2.0"
-mkit = { path = "../mkit", version = "0.4.0" }
+mkit = { path = "../../_archive/mkit", version = "0.4.0" }
 fs2 = "0.4.3"
 
 structopt = { version = "0.3.20", default-features = false, optional = true }
@@ -32,8 +32,8 @@ structopt = { version = "0.3.20", default-features = false, optional = true }
 [dev-dependencies]
 rand = { version = "0.7.3", features = ["small_rng"] }
 arbitrary = { version = "0.4", features = ["derive"] }
-ppom = { path = "../ppom", version = "0.6.0"}
-xorfilter-rs = { path = "../xorfilter", version = "0.4.0"}
+ppom = { path = "../ppom", version = "0.7.0"}
+xorfilter-rs = { path = "../../dbkit/xorfilter", version = "0.5.1"}
 
 [features]
 robt = ["structopt"]
