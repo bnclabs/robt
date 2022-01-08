@@ -1,7 +1,7 @@
 use arbitrary::{self, unstructured::Unstructured, Arbitrary};
 use mkit::nobitmap::NoBitmap;
 use ppom::mdb::OMap;
-use rand::{prelude::random, rngs::SmallRng, Rng, SeedableRng};
+use rand::{prelude::random, rngs::StdRnd, Rng, SeedableRng};
 use xorfilter::{BuildHasherDefault, Xor8};
 
 use std::thread;
@@ -18,7 +18,7 @@ fn test_robt_read() {
     ][random::<usize>() % 2];
     // let seed: u128 = 254380117901283245685140957742548176144;
     println!("test_robt_read {}", seed);
-    let mut rng = SmallRng::from_seed(seed.to_le_bytes());
+    let mut rng = StdRnd::from_seed(seed.to_le_bytes());
 
     // initial build
 
@@ -190,7 +190,7 @@ fn run_test_robt<B>(
 {
     use Error::KeyNotFound;
 
-    let mut rng = SmallRng::from_seed(seed.to_le_bytes());
+    let mut rng = StdRnd::from_seed(seed.to_le_bytes());
 
     let mut index = {
         let dir = config.dir.as_os_str();
@@ -368,7 +368,7 @@ fn open_index<B>(
 where
     B: Bloom,
 {
-    let mut rng = SmallRng::from_seed(seed.to_le_bytes());
+    let mut rng = StdRnd::from_seed(seed.to_le_bytes());
 
     let index = match rng.gen::<u8>() % 2 {
         0 => Index::open(dir, name).unwrap(),

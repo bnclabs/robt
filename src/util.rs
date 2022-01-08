@@ -35,9 +35,9 @@ pub fn load_index(
     dels: u64,
     seqno: Option<u64>,
 ) -> OMap<u16, u64> {
-    use rand::{rngs::SmallRng, Rng, SeedableRng};
+    use rand::{rngs::StdRnd, Rng, SeedableRng};
 
-    let mut rng = SmallRng::from_seed(seed.to_le_bytes());
+    let mut rng = StdRnd::from_seed(seed.to_le_bytes());
     let index = OMap::new("testing");
     seqno.map(|seqno| index.set_seqno(seqno));
 

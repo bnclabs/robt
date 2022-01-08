@@ -1,5 +1,5 @@
 use arbitrary::{self, Unstructured};
-use rand::{prelude::random, rngs::SmallRng, seq::SliceRandom, Rng, SeedableRng};
+use rand::{prelude::random, rngs::StdRnd, seq::SliceRandom, Rng, SeedableRng};
 
 use std::{cmp, fs, io::Read};
 
@@ -10,7 +10,7 @@ fn test_flush() {
     let seed: u128 = random();
     // let seed: u128 = 242003304625878770005592428923264706511;
     println!("test_flush {}", seed);
-    let mut rng = SmallRng::from_seed(seed.to_le_bytes());
+    let mut rng = StdRnd::from_seed(seed.to_le_bytes());
 
     let dir = std::env::temp_dir().join("test_flush");
     fs::create_dir_all(&dir).unwrap();

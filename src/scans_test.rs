@@ -1,4 +1,4 @@
-use rand::{prelude::random, rngs::SmallRng, Rng, SeedableRng};
+use rand::{prelude::random, rngs::StdRnd, Rng, SeedableRng};
 
 use super::*;
 use crate::util;
@@ -10,7 +10,7 @@ fn test_build_scan() {
     let seed: u128 = random();
     // let seed: u128 = 284595450980088120127817086088032225381;
     println!("test_build_scan {}", seed);
-    let mut rng = SmallRng::from_seed(seed.to_le_bytes());
+    let mut rng = StdRnd::from_seed(seed.to_le_bytes());
 
     let inserts = 1_000_000;
     let mdb = util::load_index(seed, 0, inserts, 0, 1_000, None);
@@ -43,7 +43,7 @@ fn test_nobitmap_scan() {
     let seed: u128 = random();
     // let seed: u128 = 284595450980088120127817086088032225381;
     println!("test_nobitmap_scan {}", seed);
-    let mut rng = SmallRng::from_seed(seed.to_le_bytes());
+    let mut rng = StdRnd::from_seed(seed.to_le_bytes());
 
     let inserts = 1_000_000;
     let mdb = util::load_index(seed, 0, inserts, 0, 1_000, None);
@@ -70,7 +70,7 @@ fn test_xorfilter_scan() {
     let seed: u128 = random();
     // let seed: u128 = 55460639888202704213451510247183500784;
     println!("test_xorfilter_scan {}", seed);
-    let mut rng = SmallRng::from_seed(seed.to_le_bytes());
+    let mut rng = StdRnd::from_seed(seed.to_le_bytes());
 
     let inserts = 1_000_000;
     let mdb = util::load_index(seed, 0, inserts, 0, 1_000, None);
