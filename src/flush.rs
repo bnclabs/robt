@@ -30,9 +30,7 @@ impl Flusher {
         let (fd, fpos) = if create {
             (create_file_a(file)?, 0)
         } else {
-            let fpos = err_at!(IOError, fs::metadata(file))?
-                .len()
-                .saturating_sub(1);
+            let fpos = err_at!(IOError, fs::metadata(file))?.len().saturating_sub(1);
             (open_file_a(file)?, fpos)
         };
 
@@ -123,19 +121,13 @@ fn create_file_a(file: &ffi::OsStr) -> Result<fs::File> {
     };
 
     let mut opts = fs::OpenOptions::new();
-    Ok(err_at!(
-        IOError,
-        opts.append(true).create_new(true).open(os_file)
-    )?)
+    Ok(err_at!(IOError, opts.append(true).create_new(true).open(os_file))?)
 }
 
 // open existing file in append mode for writing.
 fn open_file_a(file: &ffi::OsStr) -> Result<fs::File> {
     let os_file = path::Path::new(file);
-    Ok(err_at!(
-        IOError,
-        fs::OpenOptions::new().append(true).open(os_file)
-    )?)
+    Ok(err_at!(IOError, fs::OpenOptions::new().append(true).open(os_file))?)
 }
 
 #[cfg(test)]

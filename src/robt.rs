@@ -428,10 +428,7 @@ impl<K, V, D, B> Index<K, V, D, B> {
                     _ => ffi::OsString::from(VlogFileName::from(self.name.to_string())),
                 };
                 let vp: path::PathBuf = [self.dir.to_os_string(), fnm].iter().collect();
-                Some(err_at!(
-                    IOError,
-                    fs::OpenOptions::new().read(true).open(&vp)
-                )?)
+                Some(err_at!(IOError, fs::OpenOptions::new().read(true).open(&vp))?)
             }
             false => None,
         };
@@ -559,12 +556,10 @@ impl<K, V, D, B> Index<K, V, D, B> {
     pub fn to_vlog_file_location(&self) -> Option<ffi::OsString> {
         match &self.stats.vlog_file {
             Some(vlog_file) => {
-                let loc: path::PathBuf = [
-                    self.dir.clone(),
-                    path::Path::new(vlog_file).file_name()?.into(),
-                ]
-                .iter()
-                .collect();
+                let loc: path::PathBuf =
+                    [self.dir.clone(), path::Path::new(vlog_file).file_name()?.into()]
+                        .iter()
+                        .collect();
                 Some(loc.into())
             }
             None => None,
@@ -740,12 +735,7 @@ fn purge_file(file: ffi::OsString) -> Result<()> {
         Ok(_) => {
             err_at!(IOError, fs::remove_file(&file), "remove file {:?}", file)?;
             debug!(target: "robt", "purged file {:?}", file);
-            err_at!(
-                IOError,
-                fd.unlock(),
-                "fail unlock for exclusive lock {:?}",
-                file
-            )
+            err_at!(IOError, fd.unlock(), "fail unlock for exclusive lock {:?}", file)
         }
         Err(_) => {
             debug!(target: "robt", "unable to get exclusive lock for {:?}", file);
@@ -756,10 +746,7 @@ fn purge_file(file: ffi::OsString) -> Result<()> {
 
 fn open_file_r(file: &ffi::OsStr) -> Result<fs::File> {
     let os_file = path::Path::new(file);
-    Ok(err_at!(
-        IOError,
-        fs::OpenOptions::new().read(true).open(os_file)
-    )?)
+    Ok(err_at!(IOError, fs::OpenOptions::new().read(true).open(os_file))?)
 }
 
 #[cfg(test)]

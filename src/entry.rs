@@ -82,11 +82,8 @@ impl<K, V, D> Entry<K, V, D> {
             Entry::MM { .. } => Ok((self, vec![])),
             Entry::MZ { .. } => Ok((self, vec![])),
             Entry::ZZ { key, value, deltas } => {
-                let (value, mut vblock) = if vlog {
-                    value.into_reference(vfpos)?
-                } else {
-                    (value, vec![])
-                };
+                let (value, mut vblock) =
+                    if vlog { value.into_reference(vfpos)? } else { (value, vec![]) };
 
                 Cbor::Major4(cbor::Info::Indefinite, vec![]).encode(&mut vblock)?;
 
@@ -103,11 +100,7 @@ impl<K, V, D> Entry<K, V, D> {
                 vblock
                     .extend_from_slice(&util::into_cbor_bytes(cbor::SimpleValue::Break)?);
 
-                let entry = Entry::ZZ {
-                    key,
-                    value,
-                    deltas: drefs,
-                };
+                let entry = Entry::ZZ { key, value, deltas: drefs };
 
                 Ok((entry, vblock))
             }
@@ -130,21 +123,13 @@ impl<K, V, D> Entry<K, V, D> {
                     native_deltas.push(delta.into_native(f)?);
                 }
 
-                let entry = Entry::ZZ {
-                    key,
-                    value,
-                    deltas: native_deltas,
-                };
+                let entry = Entry::ZZ { key, value, deltas: native_deltas };
 
                 Ok(entry)
             }
             Entry::ZZ { key, value, .. } => {
                 let value = value.into_native(f)?;
-                Ok(Entry::ZZ {
-                    key,
-                    value,
-                    deltas: Vec::default(),
-                })
+                Ok(Entry::ZZ { key, value, deltas: Vec::default() })
             }
         }
     }

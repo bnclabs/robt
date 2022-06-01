@@ -55,14 +55,7 @@ impl<K, V, D, I> BuildScan<K, V, D, I> {
             let elapsed = err_at!(Fatal, time::UNIX_EPOCH.elapsed())?;
             err_at!(FailConvert, u64::try_from(elapsed.as_nanos()))?
         };
-        Ok((
-            build_time,
-            self.seqno,
-            self.n_count,
-            self.n_deleted,
-            epoch,
-            self.iter,
-        ))
+        Ok((build_time, self.seqno, self.n_count, self.n_deleted, epoch, self.iter))
     }
 }
 

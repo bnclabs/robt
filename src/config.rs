@@ -18,22 +18,18 @@ pub const FLUSH_QUEUE_SIZE: usize = 64;
 const STATS_VER1: u32 = 0x0001;
 
 pub fn to_index_file(dir: &ffi::OsStr, name: &str) -> ffi::OsString {
-    let file_path: path::PathBuf = [
-        dir.to_os_string(),
-        IndexFileName::from(name.to_string()).into(),
-    ]
-    .iter()
-    .collect();
+    let file_path: path::PathBuf =
+        [dir.to_os_string(), IndexFileName::from(name.to_string()).into()]
+            .iter()
+            .collect();
     file_path.into_os_string()
 }
 
 pub fn to_vlog_file(dir: &ffi::OsStr, name: &str) -> ffi::OsString {
-    let file_path: path::PathBuf = [
-        dir.to_os_string(),
-        VlogFileName::from(name.to_string()).into(),
-    ]
-    .iter()
-    .collect();
+    let file_path: path::PathBuf =
+        [dir.to_os_string(), VlogFileName::from(name.to_string()).into()]
+            .iter()
+            .collect();
     file_path.into_os_string()
 }
 

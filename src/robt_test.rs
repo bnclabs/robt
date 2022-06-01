@@ -34,10 +34,7 @@ fn test_robt_read() {
         value_in_vlog: false,
         flush_queue_size: 32,
     };
-    println!(
-        "test_robt_read index file {:?}",
-        config.to_index_file_location()
-    );
+    println!("test_robt_read index file {:?}", config.to_index_file_location());
 
     let testcases = [
         ("nodiff", "nobitmap"),
@@ -127,17 +124,13 @@ where
     B: Bloom,
 {
     let mut build = Builder::initial(config.clone(), appmd.to_vec()).unwrap();
-    build
-        .build_index(mdb.iter().unwrap(), bitmap, seqno)
-        .unwrap();
+    build.build_index(mdb.iter().unwrap(), bitmap, seqno).unwrap();
 
     let mut handles = vec![];
     for i in 0..n_threads {
         let (cnf, mdb, appmd) = (config.clone(), mdb.clone(), appmd.to_vec());
         let seed = seed + ((i as u128) * 10);
-        handles.push(thread::spawn(move || {
-            run_test_robt::<B>(i, seed, cnf, mdb, appmd)
-        }));
+        handles.push(thread::spawn(move || run_test_robt::<B>(i, seed, cnf, mdb, appmd)));
     }
 
     handles
@@ -163,17 +156,13 @@ where
     };
 
     let mut build = Builder::incremental(config.clone(), vlog, appmd.to_vec()).unwrap();
-    build
-        .build_index(mdb.iter().unwrap(), bitmap, seqno)
-        .unwrap();
+    build.build_index(mdb.iter().unwrap(), bitmap, seqno).unwrap();
 
     let mut handles = vec![];
     for i in 0..n_threads {
         let (cnf, mdb, appmd) = (config.clone(), mdb.clone(), appmd.to_vec());
         let seed = seed + ((i as u128) * 10);
-        handles.push(thread::spawn(move || {
-            run_test_robt::<B>(i, seed, cnf, mdb, appmd)
-        }));
+        handles.push(thread::spawn(move || run_test_robt::<B>(i, seed, cnf, mdb, appmd)));
     }
 
     handles
@@ -347,10 +336,7 @@ fn validate_stats(stats: &Stats, config: &Config, mdb: &OMap<u16, u64>, n_abytes
     assert_eq!(stats.value_in_vlog, config.value_in_vlog);
 
     if config.value_in_vlog || config.delta_ok {
-        assert_eq!(
-            config.to_vlog_file_location(),
-            stats.vlog_file.clone().unwrap()
-        );
+        assert_eq!(config.to_vlog_file_location(), stats.vlog_file.clone().unwrap());
     }
 
     assert_eq!(stats.n_count, mdb.len() as u64);
